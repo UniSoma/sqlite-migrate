@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T20:02:46.015590179Z'
+updated: '2026-08-06T20:38:12.041101061Z'
 tags:
 - wayfinder:map
 ---
@@ -36,10 +36,10 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Decide the diff-as-product surfaces](sqm-01kzc398swpc) — three pure functions ship and nothing else: drift? (Diff predicate), drift-report (single-arity presentation-only Diff→string; per-fact both-sides lines for changed objects, whole verbatim CREATE sql for one-sided ones), by-object (the one nesting view); CI drift is a documented recipe, consumer filtering a documented pattern — no bundled check, no filter helpers, no render knobs; Snapshot amended to carry per-object stored CREATE sql as equality-neutral provenance. ADR 0005; glossary terms Drift and Drift report.
 - [Design the plan model and operation ordering](sqm-01kzbppncxq2) — the Plan is a pure-EDN wrapper (ordered :ops + both Snapshot metadata + capabilities + unhandled entries); an Op is a logical kind + object path + :serves (Diff entry paths) + plan-time :sql (the reviewable "exactly this will run" artifact); the 12-step rebuild is one composite op per table, all-in-place or one rebuild never mixed; ordering baked into list position with a locked phase order; FK/transaction framing executor-owned, never ops; Apply is a dumb all-or-nothing fold that refuses drifted databases via schema_version; completeness invariant — every Diff entry served or listed unhandled with a reason. ADR 0006; glossary terms Plan, Op, Rebuild, Apply.
 - [Define the refusal taxonomy and capability tiers](sqm-01kzbppnftsn) — two-class refusal taxonomy (:incapable / :needs-intent, the latter the directives layer's exact contract) carried as refusal vectors (class + code + explanation, all that apply) on unhandled entries; four launch codes in an add-only open set (:virtual-table-changed, :rebuild-disabled, :unsupported-by-target-version, :destructive-drop — index/trigger/view drops plan freely); data-dependence is op :gates metadata, never a refusal; capabilities = target version + :rebuild? only, no named tiers; writable_schema ruled out entirely; Apply by default refuses plans with unhandled entries (partial convergence opt-in). ADR 0007; glossary terms Refusal, Refusal class, Capabilities, Gate.
+- [Decide data-dependent gates and rebuild data movement](sqm-01kzbppnk19k) — a Gate is a plan-compiled sampling SELECT (code + path + explanation + verbatim SQL with baked LIMIT: 0 rows pass, N rows "N or more") in an open add-only inventory (NOT NULL tighten, UNIQUE/PK create, CHECK add/change, FK add/retarget, STRICT and WITHOUT ROWID conversion, NOT-NULL-no-default add column); checked by a public read-only Check surface and by Apply by default up-front inside the frame; no plan-time gamble knob; rebuilds copy strictly by name; row transformation out of scope. ADR 0008; glossary term Gate sharpened, Check added.
 
 ## Not yet specified
 
-- Row-level data movement beyond what rebuilds force (kept open, not pre-ruled out) — sharpens with the gates/rebuild ticket.
 - Packaging: coordinates, namespace layout, release story — sharpens near the API-surface ticket.
 - Shape of the follow-on build effort.
 
@@ -49,3 +49,4 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - CLI or GUI tooling on top of the library — later effort.
 - Compatibility mode for classic versioned migrations — the declarative framing is the point.
 - writable_schema as a migration mechanism — Rebuild reaches every shape it would, so it buys only performance and risk; ruled out by [Define the refusal taxonomy and capability tiers](sqm-01kzbppnftsn) (ADR 0007). STRICT coercion stayed in scope as a Gate (gates ticket).
+- Row transformation beyond by-name column mapping (USING-style expressions, transform directives) — arbitrary user SQL inside the one data-touching statement, untestable against the declared schema; "fix data first, then converge" with Gates naming what to fix; ruled out by [Decide data-dependent gates and rebuild data movement](sqm-01kzbppnk19k) (ADR 0008).

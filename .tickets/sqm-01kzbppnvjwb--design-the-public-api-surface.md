@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-08-06T14:12:44.018738427Z'
-updated: '2026-08-06T18:32:45.747254951Z'
+updated: '2026-08-06T20:37:28.361654469Z'
 parent: sqm-01kzbpngs10b
 tags:
 - wayfinder:grilling
@@ -26,3 +26,7 @@ The namespace-level API: which functions exist (introspect, diff, plan, check, a
 **2026-08-06T18:32:45.747254951Z**
 
 From 'Decide the diff-as-product surfaces' (ADR 0005): namespace placement of drift?, drift-report, and by-object is delegated here; the CI recipe's composition story (no bundled check fn) is also this ticket's to settle.
+
+**2026-08-06T20:37:28.361654469Z**
+
+From gates ticket (ADR 0008): the public API includes a read-only Check surface at the effectful edge (Plan + connection → structured gate report) alongside Apply.

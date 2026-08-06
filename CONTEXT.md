@@ -105,7 +105,8 @@ _Avoid_: step, statement, action
 **Rebuild**:
 The composite Op kind implementing SQLite's 12-step generalized ALTER TABLE
 procedure for one table — create-new, copy, drop-old, rename-new, recreate
-dependents — subsuming all of that table's changes at once.
+dependents — subsuming all of that table's changes at once. The copy maps
+columns by name only; it never transforms values.
 _Avoid_: table recreation, copy migration
 
 **Apply**:
@@ -134,9 +135,17 @@ _Avoid_: feature flags, tier, profile
 
 **Gate**:
 A data precondition carried on an Op whose success depends on the rows it will
-touch (a new NOT NULL, UNIQUE, or STRICT shape). Gates are op metadata, never
-Refusals — data conformance is undecidable at plan time.
+touch (a new NOT NULL, UNIQUE, or STRICT shape): a code, the guarded object's
+path, an explanation, and a plan-compiled SELECT that samples violating rows.
+Gates are op metadata, never Refusals — data conformance is undecidable at plan
+time. Codes are an open set — added, never removed or renamed.
 _Avoid_: precondition check, guard, validation
+
+**Check**:
+The read-only effectful edge that runs a Plan's Gates verbatim against a
+connection and returns a structured report — pass/fail per Gate, violation
+counts, sample rows. Apply runs the same check by default before its Ops.
+_Avoid_: dry run, validate, pre-flight (as a name)
 
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed

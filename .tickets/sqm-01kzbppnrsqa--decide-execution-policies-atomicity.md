@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-08-06T14:12:43.929066213Z'
-updated: '2026-08-06T20:02:08.429733423Z'
+updated: '2026-08-06T20:37:28.165185940Z'
 parent: sqm-01kzbpngs10b
 tags:
 - wayfinder:grilling
@@ -25,3 +25,7 @@ Re-derive the old notes' policies from first principles for a general-purpose li
 **2026-08-06T20:02:08.429733423Z**
 
 From refusal taxonomy (ADR 0007): the default Apply contract now includes refusing any Plan whose unhandled collection is non-empty (closes the half-applied-rename trap). This ticket names the explicit opt-in flag for partial convergence; the refusing default is fixed.
+
+**2026-08-06T20:37:28.165185940Z**
+
+From gates ticket (ADR 0008): Apply gate-checks by default — all gates up-front inside the txn frame, structured report + rollback on failure. This ticket may name the opt-out flag for that default (alongside the partial-convergence opt-in from ADR 0007).

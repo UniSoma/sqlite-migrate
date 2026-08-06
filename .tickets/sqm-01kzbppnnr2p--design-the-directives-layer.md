@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-08-06T14:12:43.832337314Z'
-updated: '2026-08-06T20:02:08.229279309Z'
+updated: '2026-08-06T20:37:28.263295621Z'
 parent: sqm-01kzbpngs10b
 tags:
 - wayfinder:grilling
@@ -25,3 +25,7 @@ The intent channel: how does an author supply what the diff can't infer — rena
 **2026-08-06T20:02:08.229279309Z**
 
 From refusal taxonomy (ADR 0007): directives consume exactly the :needs-intent refusal class — an entry plans once its refusal vector is empty; :incapable is never liftable. Only launch :needs-intent code is :destructive-drop; a rename directive is a resolution of that refusal (drop-vs-rename), not a refusal kind. Open code set: directives ticket may add :needs-intent codes if it finds a second ambiguity class.
+
+**2026-08-06T20:37:28.263295621Z**
+
+From gates ticket (ADR 0008): directives carry NO data-transform mechanism — row transformation beyond by-name column mapping is out of scope. Directives lift :needs-intent refusals only and never touch gates. Rename resolution feeds the rebuild copy's name matching.
