@@ -112,10 +112,18 @@ _Avoid_: table recreation, copy migration
 
 **Apply**:
 The effectful edge that executes a Plan on a connection: a dumb fold over the
-Ops in plan order, inside the executor-owned transaction/FK frame, all-or-
-nothing by default. Refuses to run against a database whose schema has drifted
-from the Plan's source Snapshot.
+Ops in plan order, inside the executor-owned transaction/FK frame, always
+all-or-nothing — no partial or per-op modes. Refuses to run against a database
+whose schema has drifted from the Plan's source Snapshot, with no override.
+Returns an Apply report on success; throws on every non-success.
 _Avoid_: run, execute, migrate
+
+**Apply report**:
+The plain-EDN value a successful Apply returns: the Plan's identity (both
+sides' Snapshot metadata), the gate report from the pre-check (absent when
+skipped), the Ops executed, and the post-apply `schema_version` fingerprint.
+Carries no timestamps or durations.
+_Avoid_: result, receipt, log
 
 **Refusal**:
 One reason a Diff entry went unhandled in a Plan: a refusal class, a code, and a

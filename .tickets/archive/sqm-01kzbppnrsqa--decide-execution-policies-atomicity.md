@@ -1,0 +1,40 @@
+---
+id: sqm-01kzbppnrsqa
+title: 'Decide execution policies: atomicity, destructiveness, stage-then-swap'
+status: closed
+type: feature
+priority: 2
+mode: hitl
+created: '2026-08-06T14:12:43.929066213Z'
+updated: '2026-08-06T21:53:02.204338321Z'
+closed: '2026-08-06T21:53:02.204338321Z'
+parent: sqm-01kzbpngs10b
+tags:
+- wayfinder:grilling
+deps:
+- sqm-01kzbppncxq2
+---
+
+## Description
+
+## Question
+
+Re-derive the old notes' policies from first principles for a general-purpose library: apply-or-refuse atomically? destructive drops without confirmation? stage-then-swap vs in-place transaction? What does the outcome value (applied/refused/audit record) look like?
+
+## Notes
+
+**2026-08-06T20:02:08.429733423Z**
+
+From refusal taxonomy (ADR 0007): the default Apply contract now includes refusing any Plan whose unhandled collection is non-empty (closes the half-applied-rename trap). This ticket names the explicit opt-in flag for partial convergence; the refusing default is fixed.
+
+**2026-08-06T20:37:28.165185940Z**
+
+From gates ticket (ADR 0008): Apply gate-checks by default — all gates up-front inside the txn frame, structured report + rollback on failure. This ticket may name the opt-out flag for that default (alongside the partial-convergence opt-in from ADR 0007).
+
+**2026-08-06T21:52:58.219596555Z**
+
+Resolution (ADR 0011): (1) Atomicity — one transaction frame, all-or-nothing, always; no per-op/continue-on-error/checkpoint variants at launch. (2) Stage-then-swap — out of scope as an Apply mode (a connection can't safely swap files: WAL sidecars, open handles); documented as a consumer recipe (copy → apply → swap) alongside the CI drift recipe. (3) Destructiveness — no run-time guard beyond plan-time directives; the directive is the confirmation, the Plan the reviewable artifact; no second flag, no interactive hook. (4) Outcome — success returns a plain-EDN Apply report (both Snapshot metadata blocks, gate report when checked, ops executed, post-apply schema_version); every non-success (drift refusal, unhandled refusal, gate failure, SQL error) throws ex-info carrying the same structured data — shapes refined by the error-and-reporting ticket. No timestamps/durations in the report. (5) Opts — exactly two flags: :allow-unhandled? (default false, ADR 0007's partial-convergence opt-in) and :check-gates? (default true, ADR 0008's gate-check opt-out). (6) No :force? drift override — re-diff/re-plan/re-apply is the remedy. Glossary: Apply sharpened, Apply report added.
+
+**2026-08-06T21:53:02.204338321Z**
+
+Apply is strictly atomic in place (one txn, no variants, no stage-then-swap mode — consumer recipe instead); no run-time destructive guard beyond directives; success returns a plain-EDN Apply report, every non-success throws ex-info with structured data; opts exactly {:allow-unhandled? false, :check-gates? true}; no drift :force override. ADR 0011.
