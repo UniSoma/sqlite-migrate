@@ -115,6 +115,29 @@ nothing by default. Refuses to run against a database whose schema has drifted
 from the Plan's source Snapshot.
 _Avoid_: run, execute, migrate
 
+**Refusal**:
+One reason a Diff entry went unhandled in a Plan: a refusal class, a code, and a
+human-readable explanation. An unhandled entry carries every Refusal that applies,
+not just the first. Codes are an open set — added, never removed or renamed.
+_Avoid_: error, rejection, skip
+
+**Refusal class**:
+The top-level split every Refusal belongs to: `:incapable` (no route exists under
+the given Capabilities — nothing the user says can lift it) or `:needs-intent` (a
+route exists but planning it without explicit intent would risk data — lifted by a
+directive).
+
+**Capabilities**:
+The planner input describing what the plan may assume and do: the target SQLite
+version plus the `:rebuild?` policy switch. A flat map; there are no named tiers.
+_Avoid_: feature flags, tier, profile
+
+**Gate**:
+A data precondition carried on an Op whose success depends on the rows it will
+touch (a new NOT NULL, UNIQUE, or STRICT shape). Gates are op metadata, never
+Refusals — data conformance is undecidable at plan time.
+_Avoid_: precondition check, guard, validation
+
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
 objects, whole verbatim CREATE sql for one-sided ones. Presentation only — never a parse
