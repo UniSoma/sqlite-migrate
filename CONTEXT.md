@@ -120,7 +120,7 @@ _Avoid_: run, execute, migrate
 
 **Apply report**:
 The plain-EDN value a successful Apply returns: the Plan's identity (both
-sides' Snapshot metadata), the gate report from the pre-check (absent when
+sides' Snapshot metadata), the Check result from the pre-check (absent when
 skipped), the Ops executed, and the post-apply `schema_version` fingerprint.
 Carries no timestamps or durations.
 _Avoid_: result, receipt, log
@@ -152,9 +152,15 @@ _Avoid_: precondition check, guard, validation
 
 **Check**:
 The read-only effectful edge that runs a Plan's Gates verbatim against a
-connection and returns a structured report — pass/fail per Gate, violation
-counts, sample rows. Apply runs the same check by default before its Ops.
+connection and returns a Check result. Apply runs the same check by default
+before its Ops.
 _Avoid_: dry run, validate, pre-flight (as a name)
+
+**Check result**:
+The plain-EDN value Check returns: pass/fail per Gate, violation counts,
+sample rows. Also embedded in the Apply report and in the `:gate-failed`
+error payload.
+_Avoid_: check report, gate report (a Check report is a rendering of a Check result)
 
 **Directive**:
 One datum of explicit migration intent supplied to the planner alongside the Diff
@@ -168,5 +174,24 @@ _Avoid_: hint, annotation, migration option, override
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
 objects, whole verbatim CREATE sql for one-sided ones. Presentation only — never a parse
-contract; the Diff itself is the machine surface.
+contract; the Diff itself is the machine surface. `X report` always names the
+human rendering of value X.
 _Avoid_: diff output, diff summary
+
+**Plan report**:
+The human-readable plain-text rendering of a Plan — the pre-apply review
+artifact: Ops in execution order with their full SQL and Gates, unhandled
+entries with their Refusals, unused Directives. Presentation only.
+_Avoid_: plan output, plan summary
+
+**Check report**:
+The human-readable plain-text rendering of a Check result: failing Gates with
+violation counts and sample rows. Presentation only.
+_Avoid_: gate report
+
+**Non-success class**:
+The keyword classifying every exception the library throws, carried under one
+namespaced key in the exception's data. An open set — added, never removed or
+renamed. Classes and codes are the machine surface; all message and report
+strings are presentation-only.
+_Avoid_: error type, error code (for the class itself)
