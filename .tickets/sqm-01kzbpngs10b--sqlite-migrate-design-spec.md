@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T17:53:13.124898849Z'
+updated: '2026-08-06T18:33:16.182224047Z'
 tags:
 - wayfinder:map
 ---
@@ -33,6 +33,7 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Decide the target-schema declaration format](sqm-01kzbppn13g7) — SQL text is the canonical Declaration (string or seq of statements, split by SQLite's prepare loop); an EDN Schema value is sugar compiling to SQL, subset coverage with raw escape hatches; Declarations are pure state with zero migration intent (intent lives in the directives layer); execution effects invisible to introspection error loudly; SQLite itself validates. ADR 0002; glossary terms Declaration and Schema value.
 - [Decide the schema equivalence relation](sqm-01kzbppn728d) — one fixed knobless relation over Snapshots, normalizing at comparison time only; identifiers case-folded and dequoted, declared type text compared verbatim-insensitively (never by affinity), opaque expressions compared as token sequences via a lexical tokenizer (no parser) with beyond-token differences honest drift; column order, constraint names, and table flags semantic; sibling order and engine-internal objects noise; no-op, round-trip, and convergence properties locked. ADR 0003; glossary terms Equivalence, Noise, Semantic difference, Token comparison.
 - [Design the diff data model](sqm-01kzbppn9ter) — the Diff is a thin wrapper map (entries + both sides' Snapshot metadata) over a flat sequence of self-contained entries; target-relative kinds (added/removed/changed) with both sides' verbatim sub-values and a differing-facts set 1:1 with equivalence-compared facts; one entry per one-sided object, fine-grained entries only inside changed tables; no rename kind, no cost labels, no embedded dependency indices (functions over Snapshots instead); unnamed constraints pair by token-equality; locked deterministic order; plain-EDN pr-str/read-string round-trip contract; equivalent? := empty diff. ADR 0004; glossary terms Diff and Diff entry.
+- [Decide the diff-as-product surfaces](sqm-01kzc398swpc) — three pure functions ship and nothing else: drift? (Diff predicate), drift-report (single-arity presentation-only Diff→string; per-fact both-sides lines for changed objects, whole verbatim CREATE sql for one-sided ones), by-object (the one nesting view); CI drift is a documented recipe, consumer filtering a documented pattern — no bundled check, no filter helpers, no render knobs; Snapshot amended to carry per-object stored CREATE sql as equality-neutral provenance. ADR 0005; glossary terms Drift and Drift report.
 
 ## Not yet specified
 

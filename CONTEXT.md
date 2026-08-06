@@ -81,5 +81,16 @@ _Avoid_: hunk, change record
 
 **Snapshot metadata**:
 Provenance attached to a Snapshot without affecting its equality: the SQLite version that
-read it and the file's `schema_version` fingerprint. Two Snapshots of identical schemas
-compare equal regardless of provenance.
+read it, the file's `schema_version` fingerprint, and each object's stored CREATE sql.
+Two Snapshots of identical schemas compare equal regardless of provenance.
+
+**Drift**:
+A non-empty Diff between a live file and a Declaration — the live schema is not
+Equivalent to the declared one.
+_Avoid_: schema mismatch, divergence
+
+**Drift report**:
+The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
+objects, whole verbatim CREATE sql for one-sided ones. Presentation only — never a parse
+contract; the Diff itself is the machine surface.
+_Avoid_: diff output, diff summary
