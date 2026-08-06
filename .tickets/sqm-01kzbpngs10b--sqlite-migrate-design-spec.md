@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T22:12:18.472258869Z'
+updated: '2026-08-06T23:22:25.044443075Z'
 tags:
 - wayfinder:map
 ---
@@ -41,10 +41,10 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Lock the testing strategy and round-trip correctness property](sqm-01kzbppnyq59) — six locked properties: no-op and round-trip (from ADR 0003), residual convergence (post-Apply diff equals exactly the Plan's unhandled entries, with full equivalence and the re-plan fixpoint as corollaries), data preservation (surviving columns' rows survive as multisets, plus rowid stability and AUTOINCREMENT counter restoration under Rebuild), gate bidirectionality (Check pass ⇒ no data-dependent failure; Gate fail ⇒ Apply would abort), byte-identical plan determinism, and version honesty (a Plan for version V runs on V); generative testing = four generators (shrinkable EDN Schema values reaching beyond the sugar via escape hatches, mutation pairs with matching directives, conforming/violating rows, curated nasty-schema corpus), real in-memory SQLite always, test.check as reference tooling, two-point CI version matrix. ADR 0010.
 - [Decide execution policies: atomicity, destructiveness, stage-then-swap](sqm-01kzbppnrsqa) — Apply is strictly atomic in place: one transaction frame, all-or-nothing, no non-atomic variants; stage-then-swap ruled out as an Apply mode (consumer recipe instead); no run-time destructive guard beyond directives; success returns a plain-EDN Apply report (both Snapshot metadata blocks, gate report when checked, ops executed, post-apply schema_version), every non-success throws ex-info with structured data; opts exactly :allow-unhandled? (default false) and :check-gates? (default true); no drift :force override. ADR 0011; glossary Apply sharpened, Apply report added.
 - [Design the error and reporting model](sqm-01kzbppp1cjm) — one uniform ex-info envelope discriminated by the namespaced key :sqlite-migrate/error over an open add-only class set (launch: :malformed-input, :drift-refused, :unhandled-refused, :gate-failed, :sqlite-error with driver cause plus failing Op, plan index, and failing statement); payloads reuse existing values verbatim; renderers plan-report (full SQL always) and check-report join drift-report under "X-report = human rendering of X" (Check's data value renamed Check result); no message catalog, no severity field, no i18n; ex-message is a one-line summary — codes/classes are the stable machine surface, all strings presentation-only. ADR 0012; glossary terms Check result, Plan report, Check report, Non-success class.
+- [Design the public API surface](sqm-01kzbppnvjwb) — four public namespaces (core / protocol / JDBC adapter / schema, concrete names deferred to packaging); the effectful edge is one two-op protocol, SQLiteExecutor (execute-query → keyword-keyed row maps; execute-batch! → nil, owning the unconditional FK-off/txn/foreign_key_check/restore frame); database creation lives in adapter constructors, keeping every edge fn conn-first and conn-symmetric (declared-snapshot guards against non-empty databases); complete core inventory of 11 fns — no migrate! one-shot, no equivalent?; plan opts {:capabilities :directives} with capabilities defaulting to the live Snapshot's own version + :rebuild? true; schema ns exports only ->sql. ADR 0013; glossary terms Executor, Adapter, Frame.
 
 ## Not yet specified
 
-- Packaging: coordinates, namespace layout, release story — sharpens near the API-surface ticket.
 - Shape of the follow-on build effort (includes picking the concrete CI version-matrix floor per ADR 0010).
 
 ## Out of scope

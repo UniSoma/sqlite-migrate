@@ -189,6 +189,26 @@ The human-readable plain-text rendering of a Check result: failing Gates with
 violation counts and sample rows. Presentation only.
 _Avoid_: gate report
 
+**Executor**:
+The two-op effectful contract every runtime adapter implements: a read-only
+query op and an atomic batch-apply op that owns the Frame. Everything
+effectful — Introspection, Check, Apply — speaks only to an Executor;
+database creation is deliberately outside the contract.
+_Avoid_: connection, driver, backend
+
+**Adapter**:
+A runtime-specific implementation of the Executor together with the
+constructors that open databases (a file, an in-memory database). Each
+adapter exposes whatever constructors are natural for its runtime.
+_Avoid_: driver, provider
+
+**Frame**:
+The executor-owned atomic envelope around a Plan's statements: foreign-key
+enforcement off, one transaction, statements in order, a foreign-key check
+before commit, all-or-nothing, enforcement always restored. Always the same
+shape — never conditional on the Plan's contents.
+_Avoid_: transaction wrapper, harness
+
 **Non-success class**:
 The keyword classifying every exception the library throws, carried under one
 namespaced key in the exception's data. An open set — added, never removed or
