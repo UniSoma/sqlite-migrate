@@ -89,6 +89,32 @@ A non-empty Diff between a live file and a Declaration — the live schema is no
 Equivalent to the declared one.
 _Avoid_: schema mismatch, divergence
 
+**Plan**:
+The ordered, executable data value produced by planning a Diff under given
+capabilities: a thin wrapper holding an ordered sequence of Ops, both sides'
+Snapshot metadata, the capabilities planned for, and the unhandled Diff entries.
+List position is execution order. Pure EDN; nothing connection-bound.
+_Avoid_: migration, changeset, script
+
+**Op**:
+One logical schema change inside a Plan: a change kind, the path of the object
+it touches, the Diff entries it serves, and the exact SQL statements it
+executes — compiled at plan time. "Operation" is acceptable in prose.
+_Avoid_: step, statement, action
+
+**Rebuild**:
+The composite Op kind implementing SQLite's 12-step generalized ALTER TABLE
+procedure for one table — create-new, copy, drop-old, rename-new, recreate
+dependents — subsuming all of that table's changes at once.
+_Avoid_: table recreation, copy migration
+
+**Apply**:
+The effectful edge that executes a Plan on a connection: a dumb fold over the
+Ops in plan order, inside the executor-owned transaction/FK frame, all-or-
+nothing by default. Refuses to run against a database whose schema has drifted
+from the Plan's source Snapshot.
+_Avoid_: run, execute, migrate
+
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
 objects, whole verbatim CREATE sql for one-sided ones. Presentation only — never a parse
