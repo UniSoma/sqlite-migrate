@@ -1,0 +1,9 @@
+env:
+  NREPL_PORT: 7888
+
+pre_start: "bb pre_start"
+
+mounts:
+  - $HOME/.m2
+  - $HOME/.clojure
+  - $HOME/.cache

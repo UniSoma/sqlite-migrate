@@ -1,0 +1,15 @@
+{:tasks
+ {pre_start
+  {:doc "Start dev daemons (idempotent) — nREPL :7888. Backs `bb pre_start` in .aishell/config.yaml."
+   :requires ([babashka.process :as p]
+              [clojure.string :as str])
+   :task (let [listening? (fn [port]
+                            (try (.close (java.net.Socket. "127.0.0.1" (int port))) true
+                                 (catch java.io.IOException _ false)))
+               daemon     (fn [port cmd]
+                            (if (listening? port)
+                              (println (str "pre_start: :" port " already listening — skip"))
+                              (do (println (str "pre_start: starting " (str/join " " cmd)))
+                                  (p/process cmd {:out :inherit :err :inherit}))))]
+           (daemon 7888 ["clojure" "-M:test:nrepl"]))}}}
+

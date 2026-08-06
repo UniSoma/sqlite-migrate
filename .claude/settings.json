@@ -1,0 +1,84 @@
+{
+  "autoMemoryEnabled": false,
+  "worktree": { "bgIsolation": "none" },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "knot prime --limit 10" }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/*.clj*)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/*.edn)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.clj*)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.edn)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep|Glob|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-tickets-cli.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/*.clj*)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Edit(**/*.edn)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.clj*)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/*.edn)",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "clj-paren-repair-claude-hook --cljfmt"
+          }
+        ]
+      }
+    ]
+  }
+}
