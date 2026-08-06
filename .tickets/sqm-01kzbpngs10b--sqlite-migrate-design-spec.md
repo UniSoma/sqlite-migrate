@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T16:58:01.261761003Z'
+updated: '2026-08-06T17:53:13.124898849Z'
 tags:
 - wayfinder:map
 ---
@@ -32,10 +32,10 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Decide the introspection model](sqm-01kzbppn403v) — one canonical Snapshot shape produced only by introspection (live file or pristine in-memory DB running the declared schema); pragmas for structure plus a narrow extractor lifting pragma-invisible facts as verbatim opaque expression text — no SQL parser; scope is main-schema tables/indexes/views/triggers + opaque virtual tables; plain EDN, string identifiers, columns ordered, indexes/triggers nested under tables; provenance as equality-neutral metadata. ADR 0001; glossary in CONTEXT.md.
 - [Decide the target-schema declaration format](sqm-01kzbppn13g7) — SQL text is the canonical Declaration (string or seq of statements, split by SQLite's prepare loop); an EDN Schema value is sugar compiling to SQL, subset coverage with raw escape hatches; Declarations are pure state with zero migration intent (intent lives in the directives layer); execution effects invisible to introspection error loudly; SQLite itself validates. ADR 0002; glossary terms Declaration and Schema value.
 - [Decide the schema equivalence relation](sqm-01kzbppn728d) — one fixed knobless relation over Snapshots, normalizing at comparison time only; identifiers case-folded and dequoted, declared type text compared verbatim-insensitively (never by affinity), opaque expressions compared as token sequences via a lexical tokenizer (no parser) with beyond-token differences honest drift; column order, constraint names, and table flags semantic; sibling order and engine-internal objects noise; no-op, round-trip, and convergence properties locked. ADR 0003; glossary terms Equivalence, Noise, Semantic difference, Token comparison.
+- [Design the diff data model](sqm-01kzbppn9ter) — the Diff is a thin wrapper map (entries + both sides' Snapshot metadata) over a flat sequence of self-contained entries; target-relative kinds (added/removed/changed) with both sides' verbatim sub-values and a differing-facts set 1:1 with equivalence-compared facts; one entry per one-sided object, fine-grained entries only inside changed tables; no rename kind, no cost labels, no embedded dependency indices (functions over Snapshots instead); unnamed constraints pair by token-equality; locked deterministic order; plain-EDN pr-str/read-string round-trip contract; equivalent? := empty diff. ADR 0004; glossary terms Diff and Diff entry.
 
 ## Not yet specified
 
-- Diff-as-product surfaces (CI drift checks, rendering, assertions) — which concrete surfaces earn spec space; sharpens once the diff data model lands.
 - Row-level data movement beyond what rebuilds force (kept open, not pre-ruled out) — sharpens with the gates/rebuild ticket.
 - The writable_schema / STRICT-coercion capability frontier (kept open) — sharpens with the capability-tiers ticket.
 - Packaging: coordinates, namespace layout, release story — sharpens near the API-surface ticket.

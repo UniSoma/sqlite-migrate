@@ -64,6 +64,21 @@ How opaque expressions are compared: both sides tokenized by SQLite's lexical ru
 and matched token-for-token — keywords and bare/quoted identifiers case-folded,
 string and blob literals byte-exact. Lexical only; never a parser.
 
+**Diff**:
+The first-class data value produced by comparing two Snapshots (live, declared): a thin
+wrapper map holding a flat sequence of Diff entries plus both sides' Snapshot metadata.
+Empty entries ⇔ the Snapshots are Equivalent. A pure state delta: no migration intent,
+no cost labels, no derived dependency data.
+_Avoid_: changeset, delta report, drift report (a drift report is a rendering of a Diff)
+
+**Diff entry**:
+One self-contained semantic difference inside a Diff: target-relative change kind
+(`added` = declared-only, `removed` = live-only, `changed` = both, not equivalent), a
+path addressing the object, both sides' verbatim sub-values, and for `changed` the set
+of differing facts. Carries no rename concept — a rename is a removed/added pair until
+the directives layer says otherwise.
+_Avoid_: hunk, change record
+
 **Snapshot metadata**:
 Provenance attached to a Snapshot without affecting its equality: the SQLite version that
 read it and the file's `schema_version` fingerprint. Two Snapshots of identical schemas
