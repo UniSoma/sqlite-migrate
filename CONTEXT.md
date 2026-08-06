@@ -43,6 +43,27 @@ The EDN sugar form of a Declaration: one data value describing target state, com
 SQL statement text. Never consumed directly by the core.
 _Avoid_: schema DSL, schema map
 
+**Equivalence**:
+The single fixed relation over Snapshots that defines "the same schema" — no
+configuration knobs. An empty diff means equivalent, and vice versa. Normalizes only
+at comparison time; Snapshots themselves stay verbatim.
+_Avoid_: equality, schema match, sameness
+
+**Noise**:
+A difference the Equivalence relation erases: identifier case and quoting,
+whitespace/comments/keyword case inside opaque expressions, ordering among named
+siblings (indexes, triggers, views), engine-internal objects.
+
+**Semantic difference**:
+A difference the Equivalence relation keeps — it appears in the diff. Includes
+physical column order, declared type text, constraint names, and any expression
+difference beyond token identity.
+
+**Token comparison**:
+How opaque expressions are compared: both sides tokenized by SQLite's lexical rules
+and matched token-for-token — keywords and bare/quoted identifiers case-folded,
+string and blob literals byte-exact. Lexical only; never a parser.
+
 **Snapshot metadata**:
 Provenance attached to a Snapshot without affecting its equality: the SQLite version that
 read it and the file's `schema_version` fingerprint. Two Snapshots of identical schemas

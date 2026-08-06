@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T16:11:38.139448324Z'
+updated: '2026-08-06T16:58:01.261761003Z'
 tags:
 - wayfinder:map
 ---
@@ -31,6 +31,7 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Research: SQLite DDL capabilities and ALTER TABLE limits](sqm-01kzbppmqqvd) — latest is 3.53.4; 3.53.0 added ALTER COLUMN SET/DROP NOT NULL and ADD/DROP CHECK (feature-gate on version); otherwise in-place ALTER is only renames + append-only ADD COLUMN + restricted DROP COLUMN, everything else forces the 12-step rebuild (FK pragma off outside txn; create-under-temp-name-then-rename, never rename-first). Introspection pragmas cannot recover CHECK expressions, constraint names, per-column COLLATE, AUTOINCREMENT, or exact DEFAULT spelling — only the stored CREATE SQL has them, so the tool must parse SQL or restrict its schema model. Findings: docs/research/sqlite-ddl-capabilities.md on branch research/sqlite-ddl-capabilities.
 - [Decide the introspection model](sqm-01kzbppn403v) — one canonical Snapshot shape produced only by introspection (live file or pristine in-memory DB running the declared schema); pragmas for structure plus a narrow extractor lifting pragma-invisible facts as verbatim opaque expression text — no SQL parser; scope is main-schema tables/indexes/views/triggers + opaque virtual tables; plain EDN, string identifiers, columns ordered, indexes/triggers nested under tables; provenance as equality-neutral metadata. ADR 0001; glossary in CONTEXT.md.
 - [Decide the target-schema declaration format](sqm-01kzbppn13g7) — SQL text is the canonical Declaration (string or seq of statements, split by SQLite's prepare loop); an EDN Schema value is sugar compiling to SQL, subset coverage with raw escape hatches; Declarations are pure state with zero migration intent (intent lives in the directives layer); execution effects invisible to introspection error loudly; SQLite itself validates. ADR 0002; glossary terms Declaration and Schema value.
+- [Decide the schema equivalence relation](sqm-01kzbppn728d) — one fixed knobless relation over Snapshots, normalizing at comparison time only; identifiers case-folded and dequoted, declared type text compared verbatim-insensitively (never by affinity), opaque expressions compared as token sequences via a lexical tokenizer (no parser) with beyond-token differences honest drift; column order, constraint names, and table flags semantic; sibling order and engine-internal objects noise; no-op, round-trip, and convergence properties locked. ADR 0003; glossary terms Equivalence, Noise, Semantic difference, Token comparison.
 
 ## Not yet specified
 
