@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T20:38:12.041101061Z'
+updated: '2026-08-06T21:02:43.897344823Z'
 tags:
 - wayfinder:map
 ---
@@ -37,6 +37,7 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Design the plan model and operation ordering](sqm-01kzbppncxq2) — the Plan is a pure-EDN wrapper (ordered :ops + both Snapshot metadata + capabilities + unhandled entries); an Op is a logical kind + object path + :serves (Diff entry paths) + plan-time :sql (the reviewable "exactly this will run" artifact); the 12-step rebuild is one composite op per table, all-in-place or one rebuild never mixed; ordering baked into list position with a locked phase order; FK/transaction framing executor-owned, never ops; Apply is a dumb all-or-nothing fold that refuses drifted databases via schema_version; completeness invariant — every Diff entry served or listed unhandled with a reason. ADR 0006; glossary terms Plan, Op, Rebuild, Apply.
 - [Define the refusal taxonomy and capability tiers](sqm-01kzbppnftsn) — two-class refusal taxonomy (:incapable / :needs-intent, the latter the directives layer's exact contract) carried as refusal vectors (class + code + explanation, all that apply) on unhandled entries; four launch codes in an add-only open set (:virtual-table-changed, :rebuild-disabled, :unsupported-by-target-version, :destructive-drop — index/trigger/view drops plan freely); data-dependence is op :gates metadata, never a refusal; capabilities = target version + :rebuild? only, no named tiers; writable_schema ruled out entirely; Apply by default refuses plans with unhandled entries (partial convergence opt-in). ADR 0007; glossary terms Refusal, Refusal class, Capabilities, Gate.
 - [Decide data-dependent gates and rebuild data movement](sqm-01kzbppnk19k) — a Gate is a plan-compiled sampling SELECT (code + path + explanation + verbatim SQL with baked LIMIT: 0 rows pass, N rows "N or more") in an open add-only inventory (NOT NULL tighten, UNIQUE/PK create, CHECK add/change, FK add/retarget, STRICT and WITHOUT ROWID conversion, NOT-NULL-no-default add column); checked by a public read-only Check surface and by Apply by default up-front inside the frame; no plan-time gamble knob; rebuilds copy strictly by name; row transformation out of scope. ADR 0008; glossary term Gate sharpened, Check added.
+- [Design the directives layer](sqm-01kzbppnnr2p) — a Directive is a conditional per-object intent map consumed by plan alongside Diff and Capabilities (no resolved-Diff intermediate); open kind set with launch inventory exactly the four :destructive-drop resolutions (:rename-table, :rename-column, :drop-table, :drop-column); name-only binding anchored on the live side, no wildcards or allow-all-drops; unmatched directives inert-but-reported in :unused-directives (never an error, never consulted by Apply), conflicting sets throw as malformed input; fused rename pairs feed the normal in-place-vs-rebuild decision with collisions forcing rebuild; Plan echoes the input directive set. ADR 0009; glossary term Directive.
 
 ## Not yet specified
 

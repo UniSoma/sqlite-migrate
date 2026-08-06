@@ -91,8 +91,9 @@ _Avoid_: schema mismatch, divergence
 
 **Plan**:
 The ordered, executable data value produced by planning a Diff under given
-capabilities: a thin wrapper holding an ordered sequence of Ops, both sides'
-Snapshot metadata, the capabilities planned for, and the unhandled Diff entries.
+capabilities and directives: a thin wrapper holding an ordered sequence of Ops,
+both sides' Snapshot metadata, the capabilities and directives planned under
+(with unused directives called out), and the unhandled Diff entries.
 List position is execution order. Pure EDN; nothing connection-bound.
 _Avoid_: migration, changeset, script
 
@@ -146,6 +147,15 @@ The read-only effectful edge that runs a Plan's Gates verbatim against a
 connection and returns a structured report — pass/fail per Gate, violation
 counts, sample rows. Apply runs the same check by default before its Ops.
 _Avoid_: dry run, validate, pre-flight (as a name)
+
+**Directive**:
+One datum of explicit migration intent supplied to the planner alongside the Diff
+and Capabilities: a plain-EDN map naming an intended action (rename or drop) on one
+named object. Conditional — it acts only where live and declared state match its
+terms; unmatched directives are inert and reported in the Plan as unused. Lifts
+`:needs-intent` Refusals only. Kind keywords are an open set — added, never removed
+or renamed.
+_Avoid_: hint, annotation, migration option, override
 
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
