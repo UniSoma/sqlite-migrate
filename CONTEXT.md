@@ -32,6 +32,17 @@ Expression text (CHECK bodies, generated-column expressions, index expressions, 
 WHERE clauses, DEFAULT spellings) carried in a Snapshot as extracted text, never parsed
 into an AST. Compared, carried, and re-emitted — never understood.
 
+**Declaration**:
+The user-supplied target schema: canonically SQL text (a single string or a seq of
+statements), pure state carrying no migration intent. Meaningful only once executed into
+a pristine database and introspected into a Snapshot.
+_Avoid_: target schema file, schema DSL
+
+**Schema value**:
+The EDN sugar form of a Declaration: one data value describing target state, compiled to
+SQL statement text. Never consumed directly by the core.
+_Avoid_: schema DSL, schema map
+
 **Snapshot metadata**:
 Provenance attached to a Snapshot without affecting its equality: the SQLite version that
 read it and the file's `schema_version` fingerprint. Two Snapshots of identical schemas
