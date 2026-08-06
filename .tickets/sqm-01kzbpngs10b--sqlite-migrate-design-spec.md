@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T14:22:00.393710711Z'
+updated: '2026-08-06T14:51:04.709286083Z'
 tags:
 - wayfinder:map
 ---
@@ -29,6 +29,7 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Research: SQLite access from babashka and GraalVM native images](sqm-01kzbppmtvnp) — JVM + Graal native have one low-risk path (next.jdbc + sqlite-jdbc, native-image-tested since 3.40.1.0); babashka is the constraint (go-sqlite3 pod lacks transactions/connection affinity) — shape the effectful edge as a two-op protocol (introspective query, atomic apply) and defer bb support. Findings: docs/research/babashka-graal-sqlite.md on branch research/babashka-graal-sqlite.
 - [Research: prior art in declarative schema migration tools](sqm-01kzbppmxwry) — pristine-database diffing beats hand-rolled SQL parsing (and is uniquely cheap on SQLite); only Alembic/Atlas treat the diff as first-class data (validates the core bet); rename intent must be explicit data, never heuristics; data-dependent legality is handled almost nowhere (opportunity); avoid lossy rebuilds, silent skips, auto-destructive drift resets. Findings: docs/research/migration-prior-art.md on branch research/migration-prior-art.
 - [Research: SQLite DDL capabilities and ALTER TABLE limits](sqm-01kzbppmqqvd) — latest is 3.53.4; 3.53.0 added ALTER COLUMN SET/DROP NOT NULL and ADD/DROP CHECK (feature-gate on version); otherwise in-place ALTER is only renames + append-only ADD COLUMN + restricted DROP COLUMN, everything else forces the 12-step rebuild (FK pragma off outside txn; create-under-temp-name-then-rename, never rename-first). Introspection pragmas cannot recover CHECK expressions, constraint names, per-column COLLATE, AUTOINCREMENT, or exact DEFAULT spelling — only the stored CREATE SQL has them, so the tool must parse SQL or restrict its schema model. Findings: docs/research/sqlite-ddl-capabilities.md on branch research/sqlite-ddl-capabilities.
+- [Decide the introspection model](sqm-01kzbppn403v) — one canonical Snapshot shape produced only by introspection (live file or pristine in-memory DB running the declared schema); pragmas for structure plus a narrow extractor lifting pragma-invisible facts as verbatim opaque expression text — no SQL parser; scope is main-schema tables/indexes/views/triggers + opaque virtual tables; plain EDN, string identifiers, columns ordered, indexes/triggers nested under tables; provenance as equality-neutral metadata. ADR 0001; glossary in CONTEXT.md.
 
 ## Not yet specified
 
