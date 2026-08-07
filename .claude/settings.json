@@ -1,10 +1,17 @@
 {
   "autoMemoryEnabled": false,
-  "worktree": { "bgIsolation": "none" },
+  "worktree": {
+    "bgIsolation": "none"
+  },
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "knot prime --limit 10" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knot prime --limit 10"
+          }
+        ]
       }
     ],
     "PreToolUse": [
