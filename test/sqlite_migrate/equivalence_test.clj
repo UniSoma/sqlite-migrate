@@ -1,6 +1,6 @@
 (ns sqlite-migrate.equivalence-test
   "The Equivalence relation (ADR 0003): the lexical tokenizer covers
-  SQLite's token classes and nothing more, and `equivalent?` erases the
+  SQLite's token classes and nothing more, and the relation erases the
   locked Noise classes while keeping the locked Semantic differences —
   on Snapshots taken from real in-memory SQLite."
   (:require [clojure.test :refer [are deftest is testing]]
@@ -16,7 +16,7 @@
     (m/declared-snapshot conn declaration)))
 
 (defn- equivalent-declarations? [a b]
-  (m/equivalent? (snap a) (snap b)))
+  (not (m/drift? (m/diff (snap a) (snap b)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tokenizer: SQLite token classes, nothing more

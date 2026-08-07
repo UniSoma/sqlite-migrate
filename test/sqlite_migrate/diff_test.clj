@@ -177,22 +177,21 @@
   (testing "diff is empty iff the Snapshots are Equivalent"
     (let [a (snap corpus/nasty-declaration)
           b (snap corpus/nasty-declaration)]
-      (is (m/equivalent? a b))
       (is (= [] (:entries (m/diff a b))))
       (is (not (m/drift? (m/diff a b)))))
     (let [a (snap corpus/nasty-declaration)
           b (empty-snap)]
-      (is (not (m/equivalent? a b)))
+      (is (m/drift? (m/diff a b)))
       (is (seq (:entries (m/diff a b))))))
   (testing "perturbing one Semantic fact makes the diff non-empty"
     (let [a (snap ["CREATE TABLE t (a INT, b TEXT)"])
           b (snap ["CREATE TABLE t (a INTEGER, b TEXT)"])]
-      (is (not (m/equivalent? a b)) "declared type text is Semantic")
+      (is (m/drift? (m/diff a b)) "declared type text is Semantic")
       (is (seq (:entries (m/diff a b))))))
   (testing "perturbing only Noise facts keeps the diff empty"
     (let [a (snap ["CREATE TABLE t (a INT, b TEXT, CHECK (a > 0))"])
           b (snap ["CREATE TABLE \"T\" (\"A\" INT, b TEXT, CHECK ( A>0 ))"])]
-      (is (m/equivalent? a b) "identifier case, quoting, and expression whitespace are Noise")
+      (is (not (m/drift? (m/diff a b))) "identifier case, quoting, and expression whitespace are Noise")
       (is (= [] (:entries (m/diff a b)))))))
 
 (defn- emit-stored-sql
@@ -214,5 +213,5 @@
   (testing "introspect, emit stored CREATE sql into a pristine database, introspect: Equivalent"
     (let [original (snap corpus/nasty-declaration)
           re-introspected (snap (vec (emit-stored-sql original)))]
-      (is (m/equivalent? original re-introspected))
+      (is (not (m/drift? (m/diff original re-introspected))))
       (is (= [] (:entries (m/diff original re-introspected)))))))

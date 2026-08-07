@@ -251,15 +251,11 @@
   [live declared]
   (d/diff live declared))
 
-(defn equivalent?
-  "The Equivalence relation over two Snapshots: true when their Diff
-  has no entries (ADR 0003)."
-  [live declared]
-  (d/equivalent? live declared))
-
 (defn drift?
   "True when `diff` has entries — the live schema is not Equivalent to
-  the declared one."
+  the declared one. A Diff is empty iff its two Snapshots are Equivalent
+  (ADR 0003's no-op property), so this is the single predicate over the
+  Equivalence relation."
   [diff]
   (boolean (seq (:entries diff))))
 

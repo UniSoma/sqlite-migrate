@@ -327,9 +327,3 @@
                      (object-entries :view (:views live) (:views declared) view-entries)))
      :live-metadata (meta live)
      :declared-metadata (meta declared)}))
-
-(defn equivalent?
-  "The Equivalence relation: true when `diff` of the two Snapshots has
-  no entries (ADR 0003's no-op property, by construction)."
-  [live declared]
-  (empty? (:entries (diff live declared))))
