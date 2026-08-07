@@ -15,15 +15,12 @@
 ;; ---------------------------------------------------------------------------
 ;; Tokenizer
 
-(defn- lower ^String [^String s]
-  (.toLowerCase s java.util.Locale/ROOT))
-
 (defn fold-name
   "Case-fold an identifier for pairing extracted facts with pragma
   rows. Folding is for matching only; Snapshots keep original
   spellings."
-  [s]
-  (lower s))
+  ^String [^String s]
+  (.toLowerCase s java.util.Locale/ROOT))
 
 (defn- scan-quoted
   "Position just past the closing `q` of a quoted region starting at
@@ -40,10 +37,10 @@
           (inc j))
         :else (recur (inc j))))))
 
-(defn- word-start? [^Character c]
+(defn- word-start? [c]
   (or (Character/isLetter (char c)) (= c \_)))
 
-(defn- word-char? [^Character c]
+(defn- word-char? [c]
   (or (Character/isLetterOrDigit (char c)) (= c \_) (= c \$)))
 
 (defn tokenize
@@ -77,16 +74,17 @@
             (or (= c \") (= c \`))
             (let [j (scan-quoted src (inc i) c)
                   raw (subs src (inc i) (max (inc i) (dec j)))
-                  ident (str/replace raw (str c c) (str c))]
+                  qq (str c c)
+                  ident (if (neg? (.indexOf raw qq)) raw (str/replace raw qq (str c)))]
               (recur j (conj acc {:t :qid :s i :e j :text (subs src i j)
-                                  :ident ident :fold (lower ident)})))
+                                  :ident ident :fold (fold-name ident)})))
 
             (= c \[)
             (let [k (.indexOf src "]" (int i))
                   j (long (if (neg? k) n (inc k)))
                   ident (subs src (inc i) (if (neg? k) n k))]
               (recur j (conj acc {:t :qid :s i :e j :text (subs src i j)
-                                  :ident ident :fold (lower ident)})))
+                                  :ident ident :fold (fold-name ident)})))
 
             (Character/isDigit c)
             (let [j (long (loop [j (inc i)]
@@ -108,7 +106,7 @@
                 (let [k (scan-quoted src (inc j) \')]
                   (recur k (conj acc {:t :blob :s i :e k :text (subs src i k)})))
                 (recur j (conj acc {:t :word :s i :e j :text text
-                                    :ident text :fold (lower text)}))))
+                                    :ident text :fold (fold-name text)}))))
 
             :else
             (recur (inc i) (conj acc {:t :punct :s i :e (inc i) :text (str c)}))))))))
@@ -118,11 +116,11 @@
 
 (defn- word-at? [toks i s]
   (let [tok (get toks i)]
-    (and tok (= :word (:t tok)) (= s (:fold tok)))))
+    (and (= :word (:t tok)) (= s (:fold tok)))))
 
 (defn- punct-at? [toks i s]
   (let [tok (get toks i)]
-    (and tok (= :punct (:t tok)) (= s (:text tok)))))
+    (and (= :punct (:t tok)) (= s (:text tok)))))
 
 (defn- match-paren
   "Index of the `)` matching the `(` at `open`."
@@ -173,20 +171,14 @@
   "First index in `[from end)` holding the punctuation `s`, or nil."
   [toks ^long from ^long end s]
   (loop [i from]
-    (cond
-      (>= i end) nil
-      (punct-at? toks i s) i
-      :else (recur (inc i)))))
+    (when (< i end)
+      (if (punct-at? toks i s) i (recur (inc i))))))
 
 (defn- deferrability
   "Verbatim `[NOT] DEFERRABLE [INITIALLY DEFERRED|IMMEDIATE]` clause in
   token range `[from end)`, or nil."
   [^String src toks ^long from ^long end]
-  (when-let [d (loop [i from]
-                 (cond
-                   (>= i end) nil
-                   (word-at? toks i "deferrable") i
-                   :else (recur (inc i))))]
+  (when-let [d (find-word toks from end "deferrable")]
     (let [start (if (and (> d from) (word-at? toks (dec d) "not")) (dec d) d)
           stop (if (and (word-at? toks (inc d) "initially")
                      (or (word-at? toks (+ d 2) "deferred")
@@ -249,6 +241,14 @@
 
           :else j)))))
 
+(defn- paren-body
+  "When token `i` opens a parenthesized group, `[index-past-close
+  inner-text]`; else nil."
+  [^String src toks ^long i]
+  (when (punct-at? toks i "(")
+    (let [close (match-paren toks i)]
+      [(inc close) (inner-text src toks i close)])))
+
 (defn- column-def
   "Fold one column-definition token range into the accumulator."
   [^String src toks acc [^long a ^long b]]
@@ -265,18 +265,12 @@
                           (recur (long j) nil (assoc-in acc [:defaults col] text)))
               "collate" (recur (+ i 2) nil
                           (assoc-in acc [:collates col] (:ident (get toks (inc i)))))
-              "as" (if (punct-at? toks (inc i) "(")
-                     (let [close (match-paren toks (inc i))]
-                       (recur (inc close) nil
-                         (assoc-in acc [:generated col]
-                           (inner-text src toks (inc i) close))))
+              "as" (if-let [[j expr] (paren-body src toks (inc i))]
+                     (recur (long j) nil (assoc-in acc [:generated col] expr))
                      (recur (inc i) pending acc))
-              "check" (if (punct-at? toks (inc i) "(")
-                        (let [close (match-paren toks (inc i))]
-                          (recur (inc close) nil
-                            (update acc :checks conj
-                              {:name pending
-                               :expr (inner-text src toks (inc i) close)})))
+              "check" (if-let [[j expr] (paren-body src toks (inc i))]
+                        (recur (long j) nil
+                          (update acc :checks conj {:name pending :expr expr}))
                         (recur (inc i) pending acc))
               "references" (let [e (references-end toks i b)]
                              (recur e nil
@@ -302,7 +296,10 @@
                     [nil a])
         kind (:fold (get toks c))
         open (find-punct toks c b "(")
-        close (when open (match-paren toks open))]
+        close (when open (match-paren toks open))
+        column-names (fn []
+                       (mapv (fn [[s _]] (:ident (get toks s)))
+                         (split-commas toks open close)))]
     (case kind
       "primary"
       (cond-> acc
@@ -311,10 +308,7 @@
         (assoc :autoincrement? true))
 
       "unique"
-      (update acc :uniques conj
-        {:name cname
-         :columns (mapv (fn [[s _]] (:ident (get toks s)))
-                    (split-commas toks open close))})
+      (update acc :uniques conj {:name cname :columns (column-names)})
 
       "check"
       (update acc :checks conj {:name cname :expr (inner-text src toks open close)})
@@ -323,8 +317,7 @@
       (let [r (find-word toks c b "references")]
         (update acc :fks conj
           {:name cname
-           :columns (mapv (fn [[s _]] (:ident (get toks s)))
-                      (split-commas toks open close))
+           :columns (column-names)
            :ref-table (when r (:ident (get toks (inc r))))
            :deferrable (when r (deferrability src toks r b))}))
 
@@ -349,12 +342,12 @@
               :pk-name nil :autoincrement? false}]
     (if-not open
       init
-      (reduce (fn [acc [a _ :as range]]
+      (reduce (fn [acc [a :as seg]]
                 (let [tok (get toks a)]
                   (if (and (= :word (:t tok))
                         (contains? constraint-openers (:fold tok)))
-                    (table-constraint sql toks acc range)
-                    (column-def sql toks acc range))))
+                    (table-constraint sql toks acc seg)
+                    (column-def sql toks acc seg))))
         init
         (split-commas toks open close)))))
 
@@ -388,9 +381,8 @@
                       (inner-text sql toks a (dec b))
                       :else
                       (str/trim (span-text sql toks a (dec b))))))
-        where (when close
-                (when-let [w (find-word toks (inc close) n "where")]
-                  (when (< (inc w) n)
-                    (str/trim (span-text sql toks (inc w) (dec n))))))]
+        where (when-let [w (and close (find-word toks (inc close) n "where"))]
+                (when (< (inc w) n)
+                  (str/trim (span-text sql toks (inc w) (dec n)))))]
     {:columns (if close (mapv segment (split-commas toks open close)) [])
      :where where}))

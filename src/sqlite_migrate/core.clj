@@ -4,7 +4,9 @@
   Walking-skeleton width: plain tables and columns only, diffed at
   added/removed-table granularity, planned as :create-table ops. Every
   effectful edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
-  (:require [sqlite-migrate.extract :as x]
+  (:require [clojure.set :as set]
+    [clojure.string :as str]
+    [sqlite-migrate.extract :as x]
     [sqlite-migrate.protocols :as p]))
 
 ;; ---------------------------------------------------------------------------
@@ -86,7 +88,7 @@
   name/collation/direction) merged with the extractor's verbatim
   expression and partial-WHERE text from the stored CREATE INDEX sql."
   [conn index-name unique partial sql]
-  (let [facts (if sql (x/index-facts sql) {:columns [] :where nil})
+  (let [facts (when sql (x/index-facts sql))
         cols (->> (q conn "SELECT seqno, cid, name, \"desc\", coll FROM pragma_index_xinfo(?) WHERE key = 1 ORDER BY seqno"
                     index-name)
                (mapv (fn [{:keys [seqno cid name desc coll]}]
@@ -148,23 +150,22 @@
                         " AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
                         " ORDER BY name"))
         master (q conn "SELECT type, name, tbl_name, sql FROM main.sqlite_master")
-        stored-sql (fn [type name]
-                     (some #(when (and (= type (:type %)) (= name (:name %))) (:sql %))
-                       master))
+        sql-by-key (into {} (map (juxt (juxt :type :name) :sql)) master)
+        stored-sql (fn [type name] (sql-by-key [type name]))
+        triggers-by-table (group-by :tbl_name (filter #(= "trigger" (:type %)) master))
         triggers-on (fn [tbl-name]
                       (into {}
-                        (for [{:keys [type name tbl_name sql]} master
-                              :when (and (= "trigger" type) (= tbl-name tbl_name))]
+                        (for [{:keys [name sql]} (triggers-by-table tbl-name)]
                           [name (with-meta {:name name} {:sql sql})])))]
     (with-meta
       {:tables (into {}
-                 (for [{:keys [name type wr strict]} tlist
+                 (for [{:keys [name type] :as row} tlist
                        :when (not= "view" type)]
                    [name
                     (if (= "virtual" type)
                       (with-meta {:name name :virtual? true}
                         {:sql (stored-sql "table" name)})
-                      (assoc (regular-table conn stored-sql {:name name :wr wr :strict strict})
+                      (assoc (regular-table conn stored-sql row)
                         :triggers (triggers-on name)))]))
        :views (into {}
                 (for [{:keys [name type]} tlist
@@ -187,31 +188,28 @@
   table — engine-internal ones included — may hold rows afterwards
   (`CREATE TABLE ... AS SELECT` smuggles data past the first check)."
   [conn statement index before-fingerprint]
-  (when (= before-fingerprint (current-fingerprint conn))
-    (throw (ex-info (str "Declaration statement " index " has no effect on the main"
-                      " schema — a Snapshot cannot capture what it does")
-             {:sqlite-migrate/error :malformed-input
-              :statement statement
-              :statement-index index})))
-  (let [tables (q conn (str "SELECT name FROM pragma_table_list"
-                         " WHERE schema = 'main' AND type = 'table'"
-                         " AND name <> 'sqlite_schema'"))]
-    (doseq [{:keys [name]} tables]
-      (when (and (.startsWith ^String name "sqlite_")
-              (not= "sqlite_sequence" name))
-        (throw (ex-info (str "Declaration statement " index " created engine-internal"
-                          " table " name " — a Snapshot cannot capture what it does")
-                 {:sqlite-migrate/error :malformed-input
-                  :statement statement
-                  :statement-index index
-                  :table name})))
-      (when (seq (q conn (str "SELECT 1 FROM \"" (.replace ^String name "\"" "\"\"") "\" LIMIT 1")))
-        (throw (ex-info (str "Declaration statement " index " left rows in table "
-                          name " — a Snapshot carries schema, never data")
-                 {:sqlite-migrate/error :malformed-input
-                  :statement statement
-                  :statement-index index
-                  :table name}))))))
+  (let [bail! (fn [msg extra]
+                (throw (ex-info msg (merge {:sqlite-migrate/error :malformed-input
+                                            :statement statement
+                                            :statement-index index}
+                                      extra))))]
+    (when (= before-fingerprint (current-fingerprint conn))
+      (bail! (str "Declaration statement " index " has no effect on the main"
+               " schema — a Snapshot cannot capture what it does")
+        {}))
+    (let [tables (q conn (str "SELECT name FROM pragma_table_list"
+                           " WHERE schema = 'main' AND type = 'table'"
+                           " AND name <> 'sqlite_schema'"))]
+      (doseq [{:keys [name]} tables]
+        (when (and (str/starts-with? name "sqlite_")
+                (not= "sqlite_sequence" name))
+          (bail! (str "Declaration statement " index " created engine-internal"
+                   " table " name " — a Snapshot cannot capture what it does")
+            {:table name}))
+        (when (seq (q conn (str "SELECT 1 FROM \"" (.replace ^String name "\"" "\"\"") "\" LIMIT 1")))
+          (bail! (str "Declaration statement " index " left rows in table "
+                   name " — a Snapshot carries schema, never data")
+            {:table name}))))))
 
 (defn declared-snapshot
   "Realize `declaration` (a SQL statement string or seq of statement
@@ -246,12 +244,12 @@
   (let [live-names (set (keys (:tables live)))
         declared-names (set (keys (:tables declared)))
         entries (vec (concat
-                       (for [n (sort (remove declared-names live-names))]
+                       (for [n (sort (set/difference live-names declared-names))]
                          {:kind :removed
                           :path [:table n]
                           :live (get-in live [:tables n])
                           :declared nil})
-                       (for [n (sort (remove live-names declared-names))]
+                       (for [n (sort (set/difference declared-names live-names))]
                          {:kind :added
                           :path [:table n]
                           :live nil
@@ -329,50 +327,47 @@
   minimal Apply report; throws on every non-success."
   ([conn plan] (apply! conn plan {}))
   ([conn plan opts]
-    (let [{:keys [allow-unhandled?] :or {allow-unhandled? false}} opts]
-      (when (and (seq (:unhandled plan)) (not allow-unhandled?))
-        (let [n (count (:unhandled plan))]
-          (throw (ex-info (str "plan has " n " unhandled "
-                            (if (= 1 n) "entry" "entries")
-                            " and :allow-unhandled? is not set")
-                   {:sqlite-migrate/error :unhandled-refused
-                    :unhandled (:unhandled plan)}))))
-      (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
-            live-fingerprint (current-fingerprint conn)]
-        (when (not= plan-fingerprint live-fingerprint)
-          (throw (ex-info (str "live schema_version " live-fingerprint
-                            " does not match the plan's source fingerprint "
-                            plan-fingerprint)
-                   {:sqlite-migrate/error :drift-refused
-                    :plan-fingerprint plan-fingerprint
-                    :live-fingerprint live-fingerprint
-                    :live-metadata (:live-metadata plan)
-                    :declared-metadata (:declared-metadata plan)})))
-        (try
-          (p/execute-batch! conn (into [] (mapcat :sql) (:ops plan)))
-          (catch Exception e
-            (let [data (ex-data e)
-                  located (when-let [i (:statement-index data)]
-                            (op-at-batch-index (:ops plan) i))]
-              (cond
-                located
-                (let [[op-index op statement] located]
-                  (throw (ex-info (str "SQLite error during apply — op " op-index
-                                    " (" (name (:kind op)) ") failed")
-                           {:sqlite-migrate/error :sqlite-error
-                            :op op
-                            :op-index op-index
-                            :statement statement}
-                           (or (ex-cause e) e))))
+    (when (and (seq (:unhandled plan)) (not (:allow-unhandled? opts)))
+      (let [n (count (:unhandled plan))]
+        (throw (ex-info (str "plan has " n " unhandled "
+                          (if (= 1 n) "entry" "entries")
+                          " and :allow-unhandled? is not set")
+                 {:sqlite-migrate/error :unhandled-refused
+                  :unhandled (:unhandled plan)}))))
+    (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
+          live-fingerprint (current-fingerprint conn)]
+      (when (not= plan-fingerprint live-fingerprint)
+        (throw (ex-info (str "live schema_version " live-fingerprint
+                          " does not match the plan's source fingerprint "
+                          plan-fingerprint)
+                 {:sqlite-migrate/error :drift-refused
+                  :plan-fingerprint plan-fingerprint
+                  :live-fingerprint live-fingerprint
+                  :live-metadata (:live-metadata plan)
+                  :declared-metadata (:declared-metadata plan)})))
+      (try
+        (p/execute-batch! conn (into [] (mapcat :sql) (:ops plan)))
+        (catch Exception e
+          (let [data (ex-data e)
+                located (when-let [i (:statement-index data)]
+                          (op-at-batch-index (:ops plan) i))]
+            (cond
+              located
+              (let [[op-index op statement] located]
+                (throw (ex-info (str "SQLite error during apply — op " op-index
+                                  " (" (name (:kind op)) ") failed")
+                         {:sqlite-migrate/error :sqlite-error
+                          :op op
+                          :op-index op-index
+                          :statement statement}
+                         (or (ex-cause e) e))))
 
-                (:sqlite-migrate/error data)
-                (throw e)
+              (:sqlite-migrate/error data)
+              (throw e)
 
-                :else
-                (throw (ex-info "SQLite error during apply"
-                         {:sqlite-migrate/error :sqlite-error}
-                         e))))))
-        {:live-metadata (:live-metadata plan)
-         :declared-metadata (:declared-metadata plan)
-         :ops (:ops plan)
-         :schema-version (current-fingerprint conn)}))))
+              :else
+              (throw (ex-info "SQLite error during apply"
+                       {:sqlite-migrate/error :sqlite-error}
+                       e))))))
+      (assoc (select-keys plan [:live-metadata :declared-metadata :ops])
+        :schema-version (current-fingerprint conn)))))

@@ -33,17 +33,14 @@
     (try
       (raw-exec! connection "BEGIN")
       (try
-        (dorun
-          (map-indexed
-            (fn [i s]
-              (try
-                (raw-exec! connection s)
-                (catch Exception e
-                  (throw (ex-info (str "statement " i " of the batch failed")
-                           {:sqlite-migrate/error :sqlite-error
-                            :statement-index i}
-                           e)))))
-            statements))
+        (doseq [[i s] (map-indexed vector statements)]
+          (try
+            (raw-exec! connection s)
+            (catch Exception e
+              (throw (ex-info (str "statement " i " of the batch failed")
+                       {:sqlite-migrate/error :sqlite-error
+                        :statement-index i}
+                       e)))))
         (let [violations (query connection "PRAGMA foreign_key_check" [])]
           (when (seq violations)
             (throw (ex-info (str "foreign_key_check failed — "
@@ -90,4 +87,4 @@
   `SQLiteExecutor`-satisfying, `java.io.Closeable` conn; the database
   lives exactly as long as the conn is open."
   ^java.io.Closeable []
-  (->JdbcExecutor (DriverManager/getConnection "jdbc:sqlite::memory:")))
+  (connect ":memory:"))
