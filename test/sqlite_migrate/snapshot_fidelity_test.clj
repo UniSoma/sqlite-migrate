@@ -3,11 +3,11 @@
   corpus introspects to expected values through the public snapshot /
   declared-snapshot seam, on real in-memory SQLite."
   (:require [clojure.test :refer [are deftest is testing]]
-            [sqlite-migrate.core :as m]
-            [sqlite-migrate.corpus :as corpus]
-            [sqlite-migrate.jdbc :as sql-jdbc]
-            [sqlite-migrate.protocols :as p]
-            [sqlite-migrate.test-util :refer [thrown-info]]))
+    [sqlite-migrate.core :as m]
+    [sqlite-migrate.corpus :as corpus]
+    [sqlite-migrate.jdbc :as sql-jdbc]
+    [sqlite-migrate.protocols :as p]
+    [sqlite-migrate.test-util :refer [thrown-info]]))
 
 (defn- corpus-snapshot []
   (with-open [conn (sql-jdbc/in-memory)]
@@ -19,14 +19,14 @@
       (is (= #{"order" "items" "notes" "shipments"} (set (keys (:tables snap))))))
     (testing "a virtual table is opaque: name + verbatim stored CREATE sql as meta"
       (is (= {:name "notes" :virtual? true}
-             (get-in snap [:tables "notes"])))
+            (get-in snap [:tables "notes"])))
       (is (= "CREATE VIRTUAL TABLE notes USING fts5(body, tokenize = 'porter')"
-             (:sql (meta (get-in snap [:tables "notes"]))))))
+            (:sql (meta (get-in snap [:tables "notes"]))))))
     (testing "every object carries its stored CREATE sql verbatim as Clojure meta"
       (is (= (nth corpus/nasty-declaration 0)
-             (:sql (meta (get-in snap [:tables "order"])))))
+            (:sql (meta (get-in snap [:tables "order"])))))
       (is (= (nth corpus/nasty-declaration 2)
-             (:sql (meta (get-in snap [:tables "items" :indexes "idx_items_qty"]))))))
+            (:sql (meta (get-in snap [:tables "items" :indexes "idx_items_qty"]))))))
     (testing "table options come from pragmas, not parsing"
       (is (true? (get-in snap [:tables "items" :strict?])))
       (is (true? (get-in snap [:tables "items" :without-rowid?])))
@@ -34,36 +34,36 @@
       (is (false? (get-in snap [:tables "order" :without-rowid?]))))
     (testing "columns in cid order, generated columns included"
       (is (= ["sku" "qty" "price" "subtotal" "big" "order_id"]
-             (mapv :name (get-in snap [:tables "items" :columns]))))
+            (mapv :name (get-in snap [:tables "items" :columns]))))
       (is (= ["id" "group" "total"]
-             (mapv :name (get-in snap [:tables "order" :columns])))))
+            (mapv :name (get-in snap [:tables "order" :columns])))))
     (testing "not-null and pk facts ride on columns"
       (let [items-cols (into {} (map (juxt :name identity))
-                             (get-in snap [:tables "items" :columns]))]
+                         (get-in snap [:tables "items" :columns]))]
         (is (true? (get-in items-cols ["qty" :not-null?])))
         (is (false? (get-in items-cols ["price" :not-null?])))
         (is (= 1 (get-in items-cols ["sku" :pk])))
         (is (= 0 (get-in items-cols ["qty" :pk])))))
     (testing "indexes nest under their table; automatic indexes are excluded"
       (is (= #{"idx_order_expr" "idx_order_group"}
-             (set (keys (get-in snap [:tables "order" :indexes])))))
+            (set (keys (get-in snap [:tables "order" :indexes])))))
       (is (= #{"idx_items_qty"}
-             (set (keys (get-in snap [:tables "items" :indexes])))))
+            (set (keys (get-in snap [:tables "items" :indexes])))))
       (is (true? (get-in snap [:tables "order" :indexes "idx_order_group" :unique?])))
       (is (true? (get-in snap [:tables "items" :indexes "idx_items_qty" :partial?])))
       (is (false? (get-in snap [:tables "order" :indexes "idx_order_expr" :partial?]))))
     (testing "triggers nest under the table or view they fire on"
       (is (= #{"trg_order_touch"}
-             (set (keys (get-in snap [:tables "order" :triggers])))))
+            (set (keys (get-in snap [:tables "order" :triggers])))))
       (is (= (nth corpus/nasty-declaration 6)
-             (:sql (meta (get-in snap [:tables "order" :triggers "trg_order_touch"])))))
+            (:sql (meta (get-in snap [:tables "order" :triggers "trg_order_touch"])))))
       (is (= #{"trg_view_insert"}
-             (set (keys (get-in snap [:views "v_totals" :triggers]))))))
+            (set (keys (get-in snap [:views "v_totals" :triggers]))))))
     (testing "views are top-level with ordered column names and verbatim sql as meta"
       (is (= #{"v_totals"} (set (keys (:views snap)))))
       (is (= ["id" "total"] (get-in snap [:views "v_totals" :columns])))
       (is (= (nth corpus/nasty-declaration 5)
-             (:sql (meta (get-in snap [:views "v_totals"]))))))))
+            (:sql (meta (get-in snap [:views "v_totals"]))))))))
 
 (deftest extractor-lifts-pragma-invisible-facts
   (let [snap (corpus-snapshot)
@@ -102,7 +102,7 @@
                :on-delete "CASCADE"
                :match "NONE"
                :deferrable "DEFERRABLE INITIALLY DEFERRED"}]
-             (:foreign-keys items)))
+            (:foreign-keys items)))
       (is (= [] (:foreign-keys order))))
     (let [shipments (get-in snap [:tables "shipments"])]
       (testing "multiple FKs pair name and deferrability by referenced table + from-columns"
@@ -130,16 +130,16 @@
                  :on-delete "NO ACTION"
                  :match "NONE"
                  :deferrable "DEFERRABLE INITIALLY DEFERRED"}]
-               (:foreign-keys shipments))))
+              (:foreign-keys shipments))))
       (testing "a CHECK after a column-level REFERENCES clause is still captured"
         (is (= [{:name nil :expr "note_ref <> 0"}] (:checks shipments)))))
     (testing "index expressions and partial WHERE clauses verbatim"
       (is (= "qty > 0" (get-in items [:indexes "idx_items_qty" :where])))
       (is (= [{:name "qty" :collate "BINARY" :desc? true}]
-             (get-in items [:indexes "idx_items_qty" :columns])))
+            (get-in items [:indexes "idx_items_qty" :columns])))
       (is (= [{:expr "total * 2" :collate "BINARY" :desc? false}
               {:name "group" :collate "RTRIM" :desc? false}]
-             (get-in order [:indexes "idx_order_expr" :columns]))))))
+            (get-in order [:indexes "idx_order_expr" :columns]))))))
 
 (defn- declared-snapshot-error [declaration]
   (with-open [conn (sql-jdbc/in-memory)]
@@ -148,10 +148,10 @@
 (deftest declaration-with-invisible-effects-errors-loudly
   (testing "statements introspection cannot capture error with which-statement context"
     (are [declaration bad-statement bad-index]
-         (let [data (declared-snapshot-error declaration)]
-           (and (= :malformed-input (:sqlite-migrate/error data))
-                (= bad-statement (:statement data))
-                (= bad-index (:statement-index data))))
+      (let [data (declared-snapshot-error declaration)]
+        (and (= :malformed-input (:sqlite-migrate/error data))
+          (= bad-statement (:statement data))
+          (= bad-index (:statement-index data))))
       ;; DML
       ["CREATE TABLE t (x INT)" "INSERT INTO t VALUES (1)"]
       "INSERT INTO t VALUES (1)" 1
@@ -188,7 +188,7 @@
           b (m/snapshot detoured)]
       (is (= a b))
       (is (not= (:schema-version (meta a))
-                (:schema-version (meta b))))
+            (:schema-version (meta b))))
       (is (string? (:sqlite-version (meta a))))
       (is (integer? (:schema-version (meta a)))))))
 
@@ -201,4 +201,4 @@
           b (m/declared-snapshot cb ["CREATE TABLE t (x INTEGER,   y TEXT)"])]
       (is (= a b))
       (is (not= (:sql (meta (get-in a [:tables "t"])))
-                (:sql (meta (get-in b [:tables "t"]))))))))
+            (:sql (meta (get-in b [:tables "t"]))))))))

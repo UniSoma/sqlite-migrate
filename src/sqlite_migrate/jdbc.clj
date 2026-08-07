@@ -3,8 +3,8 @@
   that open databases. Depends on `sqlite-migrate.protocols` only — never
   on the core."
   (:require [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs]
-            [sqlite-migrate.protocols :as p])
+    [next.jdbc.result-set :as rs]
+    [sqlite-migrate.protocols :as p])
   (:import (java.sql Connection DriverManager)))
 
 (set! *warn-on-reflection* true)
@@ -12,7 +12,7 @@
 (defn- query
   [^Connection connection sql params]
   (jdbc/execute! connection (into [sql] params)
-                 {:builder-fn rs/as-unqualified-lower-maps}))
+    {:builder-fn rs/as-unqualified-lower-maps}))
 
 (defn- raw-exec!
   [^Connection connection ^String sql]
@@ -34,30 +34,30 @@
       (raw-exec! connection "BEGIN")
       (try
         (dorun
-         (map-indexed
-          (fn [i s]
-            (try
-              (raw-exec! connection s)
-              (catch Exception e
-                (throw (ex-info (str "statement " i " of the batch failed")
-                                {:sqlite-migrate/error :sqlite-error
-                                 :statement-index i}
-                                e)))))
-          statements))
+          (map-indexed
+            (fn [i s]
+              (try
+                (raw-exec! connection s)
+                (catch Exception e
+                  (throw (ex-info (str "statement " i " of the batch failed")
+                           {:sqlite-migrate/error :sqlite-error
+                            :statement-index i}
+                           e)))))
+            statements))
         (let [violations (query connection "PRAGMA foreign_key_check" [])]
           (when (seq violations)
             (throw (ex-info (str "foreign_key_check failed — "
-                                 (count violations) " violating row(s)")
-                            {:sqlite-migrate/error :sqlite-error
-                             :violations violations}))))
+                              (count violations) " violating row(s)")
+                     {:sqlite-migrate/error :sqlite-error
+                      :violations violations}))))
         (raw-exec! connection "COMMIT")
         (catch Throwable t
           (try (raw-exec! connection "ROLLBACK")
-               (catch Throwable _))
+            (catch Throwable _))
           (throw t)))
       (finally
         (raw-exec! connection (str "PRAGMA foreign_keys="
-                                   (if fk-was-on? "ON" "OFF")))))
+                                (if fk-was-on? "ON" "OFF")))))
     nil))
 
 (deftype JdbcExecutor [^Connection connection]
@@ -77,13 +77,13 @@
   belongs to the caller."
   ^java.io.Closeable [source]
   (->JdbcExecutor
-   (cond
-     (string? source) (DriverManager/getConnection (str "jdbc:sqlite:" source))
-     (instance? Connection source) source
-     (instance? javax.sql.DataSource source) (.getConnection ^javax.sql.DataSource source)
-     :else (throw (ex-info "connect takes a file path, Connection, or DataSource"
-                           {:sqlite-migrate/error :malformed-input
-                            :source source})))))
+    (cond
+      (string? source) (DriverManager/getConnection (str "jdbc:sqlite:" source))
+      (instance? Connection source) source
+      (instance? javax.sql.DataSource source) (.getConnection ^javax.sql.DataSource source)
+      :else (throw (ex-info "connect takes a file path, Connection, or DataSource"
+                     {:sqlite-migrate/error :malformed-input
+                      :source source})))))
 
 (defn in-memory
   "Open a fresh private in-memory SQLite database. Returns a

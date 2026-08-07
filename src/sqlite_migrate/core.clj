@@ -5,7 +5,7 @@
   added/removed-table granularity, planned as :create-table ops. Every
   effectful edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
   (:require [sqlite-migrate.extract :as x]
-            [sqlite-migrate.protocols :as p]))
+    [sqlite-migrate.protocols :as p]))
 
 ;; ---------------------------------------------------------------------------
 ;; Introspection
@@ -23,17 +23,17 @@
   spelling, COLLATE, generated expression)."
   [conn table-name facts]
   (->> (q conn "SELECT name, type, \"notnull\", pk, hidden FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid"
-          table-name)
-       (mapv (fn [{:keys [name type notnull pk hidden]}]
-               (let [k (x/fold-name name)]
-                 (cond-> {:name name :type type :not-null? (= 1 notnull) :pk pk}
-                   (contains? (:defaults facts) k)
-                   (assoc :default (get (:defaults facts) k))
-                   (contains? (:collates facts) k)
-                   (assoc :collate (get (:collates facts) k))
-                   (contains? #{2 3} hidden)
-                   (assoc :generated {:expr (get (:generated facts) k)
-                                      :storage (if (= 2 hidden) :virtual :stored)})))))))
+         table-name)
+    (mapv (fn [{:keys [name type notnull pk hidden]}]
+            (let [k (x/fold-name name)]
+              (cond-> {:name name :type type :not-null? (= 1 notnull) :pk pk}
+                (contains? (:defaults facts) k)
+                (assoc :default (get (:defaults facts) k))
+                (contains? (:collates facts) k)
+                (assoc :collate (get (:collates facts) k))
+                (contains? #{2 3} hidden)
+                (assoc :generated {:expr (get (:generated facts) k)
+                                   :storage (if (= 2 hidden) :virtual :stored)})))))))
 
 (defn- foreign-keys
   "Foreign keys merged from two sources: `pragma_foreign_key_list`
@@ -44,17 +44,17 @@
   pairing falls back to positional order (pragma ids descending)."
   [conn table-name facts]
   (let [groups (->> (q conn "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, \"match\" FROM pragma_foreign_key_list(?)"
-                       table-name)
-                    (group-by :id)
-                    (sort-by key >)
-                    (mapv (fn [[_ rows]]
-                            (let [rows (sort-by :seq rows)]
-                              {:columns (mapv :from rows)
-                               :ref-table (:table (first rows))
-                               :ref-columns (mapv :to rows)
-                               :on-update (:on_update (first rows))
-                               :on-delete (:on_delete (first rows))
-                               :match (:match (first rows))}))))
+                      table-name)
+                 (group-by :id)
+                 (sort-by key >)
+                 (mapv (fn [[_ rows]]
+                         (let [rows (sort-by :seq rows)]
+                           {:columns (mapv :from rows)
+                            :ref-table (:table (first rows))
+                            :ref-columns (mapv :to rows)
+                            :on-update (:on_update (first rows))
+                            :on-delete (:on_delete (first rows))
+                            :match (:match (first rows))}))))
         clauses (vec (:fks facts))
         fk-key (fn [{:keys [ref-table columns]}]
                  (when (and ref-table (seq columns))
@@ -62,24 +62,24 @@
         ckeys (mapv fk-key clauses)
         gkeys (mapv fk-key groups)
         matchable? (and (seq clauses)
-                        (= (count groups) (count clauses))
-                        (every? some? ckeys)
-                        (apply distinct? ckeys)
-                        (= (set ckeys) (set gkeys)))]
+                     (= (count groups) (count clauses))
+                     (every? some? ckeys)
+                     (apply distinct? ckeys)
+                     (= (set ckeys) (set gkeys)))]
     (if matchable?
       (let [by-key (zipmap gkeys groups)]
         (mapv (fn [clause ck]
                 (assoc (by-key ck)
-                       :name (:name clause)
-                       :deferrable (:deferrable clause)))
-              clauses
-              ckeys))
+                  :name (:name clause)
+                  :deferrable (:deferrable clause)))
+          clauses
+          ckeys))
       (mapv (fn [group clause]
               (assoc group
-                     :name (:name clause)
-                     :deferrable (:deferrable clause)))
-            groups
-            (concat clauses (repeat nil))))))
+                :name (:name clause)
+                :deferrable (:deferrable clause)))
+        groups
+        (concat clauses (repeat nil))))))
 
 (defn- index-value
   "One named index: pragma facts (uniqueness, partiality, per-column
@@ -88,12 +88,12 @@
   [conn index-name unique partial sql]
   (let [facts (if sql (x/index-facts sql) {:columns [] :where nil})
         cols (->> (q conn "SELECT seqno, cid, name, \"desc\", coll FROM pragma_index_xinfo(?) WHERE key = 1 ORDER BY seqno"
-                     index-name)
-                  (mapv (fn [{:keys [seqno cid name desc coll]}]
-                          (let [base {:collate coll :desc? (= 1 desc)}]
-                            (if (= -2 cid)
-                              (assoc base :expr (get-in facts [:columns seqno]))
-                              (assoc base :name name))))))]
+                    index-name)
+               (mapv (fn [{:keys [seqno cid name desc coll]}]
+                       (let [base {:collate coll :desc? (= 1 desc)}]
+                         (if (= -2 cid)
+                           (assoc base :expr (get-in facts [:columns seqno]))
+                           (assoc base :name name))))))]
     (with-meta
       (cond-> {:name index-name
                :unique? (= 1 unique)
@@ -108,10 +108,10 @@
   engine-internal and excluded from the Snapshot."
   [conn stored-sql table-name]
   (into {}
-        (for [{:keys [name unique partial]}
-              (q conn "SELECT name, \"unique\", origin, partial FROM pragma_index_list(?) WHERE origin = 'c'"
-                 table-name)]
-          [name (index-value conn name unique partial (stored-sql "index" name))])))
+    (for [{:keys [name unique partial]}
+          (q conn "SELECT name, \"unique\", origin, partial FROM pragma_index_list(?) WHERE origin = 'c'"
+            table-name)]
+      [name (index-value conn name unique partial (stored-sql "index" name))])))
 
 (defn- regular-table [conn stored-sql {:keys [name wr strict]}]
   (let [sql (stored-sql "table" name)
@@ -143,37 +143,37 @@
   :schema-version ...}` the same way."
   [conn]
   (let [tlist (q conn (str "SELECT name, type, wr, strict FROM pragma_table_list"
-                           " WHERE schema = 'main'"
-                           " AND type IN ('table', 'view', 'virtual')"
-                           " AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
-                           " ORDER BY name"))
+                        " WHERE schema = 'main'"
+                        " AND type IN ('table', 'view', 'virtual')"
+                        " AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
+                        " ORDER BY name"))
         master (q conn "SELECT type, name, tbl_name, sql FROM main.sqlite_master")
         stored-sql (fn [type name]
                      (some #(when (and (= type (:type %)) (= name (:name %))) (:sql %))
-                           master))
+                       master))
         triggers-on (fn [tbl-name]
                       (into {}
-                            (for [{:keys [type name tbl_name sql]} master
-                                  :when (and (= "trigger" type) (= tbl-name tbl_name))]
-                              [name (with-meta {:name name} {:sql sql})])))]
+                        (for [{:keys [type name tbl_name sql]} master
+                              :when (and (= "trigger" type) (= tbl-name tbl_name))]
+                          [name (with-meta {:name name} {:sql sql})])))]
     (with-meta
       {:tables (into {}
-                     (for [{:keys [name type wr strict]} tlist
-                           :when (not= "view" type)]
-                       [name
-                        (if (= "virtual" type)
-                          (with-meta {:name name :virtual? true}
-                            {:sql (stored-sql "table" name)})
-                          (assoc (regular-table conn stored-sql {:name name :wr wr :strict strict})
-                                 :triggers (triggers-on name)))]))
+                 (for [{:keys [name type wr strict]} tlist
+                       :when (not= "view" type)]
+                   [name
+                    (if (= "virtual" type)
+                      (with-meta {:name name :virtual? true}
+                        {:sql (stored-sql "table" name)})
+                      (assoc (regular-table conn stored-sql {:name name :wr wr :strict strict})
+                        :triggers (triggers-on name)))]))
        :views (into {}
-                    (for [{:keys [name type]} tlist
-                          :when (= "view" type)]
-                      [name (with-meta
-                              {:name name
-                               :columns (mapv :name (q conn "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid" name))
-                               :triggers (triggers-on name)}
-                              {:sql (stored-sql "view" name)})]))}
+                (for [{:keys [name type]} tlist
+                      :when (= "view" type)]
+                  [name (with-meta
+                          {:name name
+                           :columns (mapv :name (q conn "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid" name))
+                           :triggers (triggers-on name)}
+                          {:sql (stored-sql "view" name)})]))}
       {:sqlite-version (-> (q conn "SELECT sqlite_version() AS v") first :v)
        :schema-version (current-fingerprint conn)})))
 
@@ -189,29 +189,29 @@
   [conn statement index before-fingerprint]
   (when (= before-fingerprint (current-fingerprint conn))
     (throw (ex-info (str "Declaration statement " index " has no effect on the main"
-                         " schema — a Snapshot cannot capture what it does")
-                    {:sqlite-migrate/error :malformed-input
-                     :statement statement
-                     :statement-index index})))
+                      " schema — a Snapshot cannot capture what it does")
+             {:sqlite-migrate/error :malformed-input
+              :statement statement
+              :statement-index index})))
   (let [tables (q conn (str "SELECT name FROM pragma_table_list"
-                            " WHERE schema = 'main' AND type = 'table'"
-                            " AND name <> 'sqlite_schema'"))]
+                         " WHERE schema = 'main' AND type = 'table'"
+                         " AND name <> 'sqlite_schema'"))]
     (doseq [{:keys [name]} tables]
       (when (and (.startsWith ^String name "sqlite_")
-                 (not= "sqlite_sequence" name))
+              (not= "sqlite_sequence" name))
         (throw (ex-info (str "Declaration statement " index " created engine-internal"
-                             " table " name " — a Snapshot cannot capture what it does")
-                        {:sqlite-migrate/error :malformed-input
-                         :statement statement
-                         :statement-index index
-                         :table name})))
+                          " table " name " — a Snapshot cannot capture what it does")
+                 {:sqlite-migrate/error :malformed-input
+                  :statement statement
+                  :statement-index index
+                  :table name})))
       (when (seq (q conn (str "SELECT 1 FROM \"" (.replace ^String name "\"" "\"\"") "\" LIMIT 1")))
         (throw (ex-info (str "Declaration statement " index " left rows in table "
-                             name " — a Snapshot carries schema, never data")
-                        {:sqlite-migrate/error :malformed-input
-                         :statement statement
-                         :statement-index index
-                         :table name}))))))
+                          name " — a Snapshot carries schema, never data")
+                 {:sqlite-migrate/error :malformed-input
+                  :statement statement
+                  :statement-index index
+                  :table name}))))))
 
 (defn declared-snapshot
   "Realize `declaration` (a SQL statement string or seq of statement
@@ -225,9 +225,9 @@
         existing (concat (keys (:tables before)) (keys (:views before)))]
     (when (seq existing)
       (throw (ex-info (str "declared-snapshot requires an empty database — found "
-                           (count existing) " object(s)")
-                      {:sqlite-migrate/error :malformed-input
-                       :existing-objects (vec (sort existing))}))))
+                        (count existing) " object(s)")
+               {:sqlite-migrate/error :malformed-input
+                :existing-objects (vec (sort existing))}))))
   (let [statements (if (string? declaration) [declaration] (vec declaration))]
     (doseq [[index statement] (map-indexed vector statements)]
       (let [fingerprint (current-fingerprint conn)]
@@ -246,16 +246,16 @@
   (let [live-names (set (keys (:tables live)))
         declared-names (set (keys (:tables declared)))
         entries (vec (concat
-                      (for [n (sort (remove declared-names live-names))]
-                        {:kind :removed
-                         :path [:table n]
-                         :live (get-in live [:tables n])
-                         :declared nil})
-                      (for [n (sort (remove live-names declared-names))]
-                        {:kind :added
-                         :path [:table n]
-                         :live nil
-                         :declared (get-in declared [:tables n])})))]
+                       (for [n (sort (remove declared-names live-names))]
+                         {:kind :removed
+                          :path [:table n]
+                          :live (get-in live [:tables n])
+                          :declared nil})
+                       (for [n (sort (remove live-names declared-names))]
+                         {:kind :added
+                          :path [:table n]
+                          :live nil
+                          :declared (get-in declared [:tables n])})))]
     {:entries entries
      :live-metadata (meta live)
      :declared-metadata (meta declared)}))
@@ -280,27 +280,27 @@
   `:needs-intent` Refusal."
   ([diff] (plan diff {}))
   ([diff opts]
-   (let [capabilities (merge {:sqlite-version (get-in diff [:live-metadata :sqlite-version])
-                              :rebuild? true}
-                             (:capabilities opts))
-         {added :added removed :removed} (group-by :kind (:entries diff))
-         ops (vec (for [entry (sort-by #(second (:path %)) added)]
-                    {:kind :create-table
-                     :path (:path entry)
-                     :serves #{(:path entry)}
-                     :sql [(:sql (meta (:declared entry)))]}))
-         unhandled (vec (for [entry removed]
-                          {:entry entry
-                           :refusals [{:class :needs-intent
-                                       :code :drop-table
-                                       :explanation (str "dropping table "
-                                                         (second (:path entry))
-                                                         " requires an explicit drop directive")}]}))]
-     {:ops ops
-      :unhandled unhandled
-      :live-metadata (:live-metadata diff)
-      :declared-metadata (:declared-metadata diff)
-      :capabilities capabilities})))
+    (let [capabilities (merge {:sqlite-version (get-in diff [:live-metadata :sqlite-version])
+                               :rebuild? true}
+                         (:capabilities opts))
+          {added :added removed :removed} (group-by :kind (:entries diff))
+          ops (vec (for [entry (sort-by #(second (:path %)) added)]
+                     {:kind :create-table
+                      :path (:path entry)
+                      :serves #{(:path entry)}
+                      :sql [(:sql (meta (:declared entry)))]}))
+          unhandled (vec (for [entry removed]
+                           {:entry entry
+                            :refusals [{:class :needs-intent
+                                        :code :drop-table
+                                        :explanation (str "dropping table "
+                                                       (second (:path entry))
+                                                       " requires an explicit drop directive")}]}))]
+      {:ops ops
+       :unhandled unhandled
+       :live-metadata (:live-metadata diff)
+       :declared-metadata (:declared-metadata diff)
+       :capabilities capabilities})))
 
 ;; ---------------------------------------------------------------------------
 ;; Apply
@@ -329,50 +329,50 @@
   minimal Apply report; throws on every non-success."
   ([conn plan] (apply! conn plan {}))
   ([conn plan opts]
-   (let [{:keys [allow-unhandled?] :or {allow-unhandled? false}} opts]
-     (when (and (seq (:unhandled plan)) (not allow-unhandled?))
-       (let [n (count (:unhandled plan))]
-         (throw (ex-info (str "plan has " n " unhandled "
-                              (if (= 1 n) "entry" "entries")
-                              " and :allow-unhandled? is not set")
-                         {:sqlite-migrate/error :unhandled-refused
-                          :unhandled (:unhandled plan)}))))
-     (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
-           live-fingerprint (current-fingerprint conn)]
-       (when (not= plan-fingerprint live-fingerprint)
-         (throw (ex-info (str "live schema_version " live-fingerprint
-                              " does not match the plan's source fingerprint "
-                              plan-fingerprint)
-                         {:sqlite-migrate/error :drift-refused
-                          :plan-fingerprint plan-fingerprint
-                          :live-fingerprint live-fingerprint
-                          :live-metadata (:live-metadata plan)
-                          :declared-metadata (:declared-metadata plan)})))
-       (try
-         (p/execute-batch! conn (into [] (mapcat :sql) (:ops plan)))
-         (catch Exception e
-           (let [data (ex-data e)
-                 located (when-let [i (:statement-index data)]
-                           (op-at-batch-index (:ops plan) i))]
-             (cond
-               located
-               (let [[op-index op statement] located]
-                 (throw (ex-info (str "SQLite error during apply — op " op-index
-                                      " (" (name (:kind op)) ") failed")
-                                 {:sqlite-migrate/error :sqlite-error
-                                  :op op
-                                  :op-index op-index
-                                  :statement statement}
-                                 (or (ex-cause e) e))))
+    (let [{:keys [allow-unhandled?] :or {allow-unhandled? false}} opts]
+      (when (and (seq (:unhandled plan)) (not allow-unhandled?))
+        (let [n (count (:unhandled plan))]
+          (throw (ex-info (str "plan has " n " unhandled "
+                            (if (= 1 n) "entry" "entries")
+                            " and :allow-unhandled? is not set")
+                   {:sqlite-migrate/error :unhandled-refused
+                    :unhandled (:unhandled plan)}))))
+      (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
+            live-fingerprint (current-fingerprint conn)]
+        (when (not= plan-fingerprint live-fingerprint)
+          (throw (ex-info (str "live schema_version " live-fingerprint
+                            " does not match the plan's source fingerprint "
+                            plan-fingerprint)
+                   {:sqlite-migrate/error :drift-refused
+                    :plan-fingerprint plan-fingerprint
+                    :live-fingerprint live-fingerprint
+                    :live-metadata (:live-metadata plan)
+                    :declared-metadata (:declared-metadata plan)})))
+        (try
+          (p/execute-batch! conn (into [] (mapcat :sql) (:ops plan)))
+          (catch Exception e
+            (let [data (ex-data e)
+                  located (when-let [i (:statement-index data)]
+                            (op-at-batch-index (:ops plan) i))]
+              (cond
+                located
+                (let [[op-index op statement] located]
+                  (throw (ex-info (str "SQLite error during apply — op " op-index
+                                    " (" (name (:kind op)) ") failed")
+                           {:sqlite-migrate/error :sqlite-error
+                            :op op
+                            :op-index op-index
+                            :statement statement}
+                           (or (ex-cause e) e))))
 
-               (:sqlite-migrate/error data)
-               (throw e)
+                (:sqlite-migrate/error data)
+                (throw e)
 
-               :else
-               (throw (ex-info "SQLite error during apply"
-                               {:sqlite-migrate/error :sqlite-error}
-                               e))))))
-       {:live-metadata (:live-metadata plan)
-        :declared-metadata (:declared-metadata plan)
-        :ops (:ops plan)
-        :schema-version (current-fingerprint conn)}))))
+                :else
+                (throw (ex-info "SQLite error during apply"
+                         {:sqlite-migrate/error :sqlite-error}
+                         e))))))
+        {:live-metadata (:live-metadata plan)
+         :declared-metadata (:declared-metadata plan)
+         :ops (:ops plan)
+         :schema-version (current-fingerprint conn)}))))

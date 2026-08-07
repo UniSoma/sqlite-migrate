@@ -2,10 +2,10 @@
   "Walking skeleton: the whole pipeline end-to-end through the public
   surfaces (ADR 0013) against real in-memory SQLite."
   (:require [clojure.test :refer [deftest is testing]]
-            [sqlite-migrate.core :as m]
-            [sqlite-migrate.jdbc :as sql-jdbc]
-            [sqlite-migrate.protocols :as p]
-            [sqlite-migrate.test-util :refer [thrown-info]]))
+    [sqlite-migrate.core :as m]
+    [sqlite-migrate.jdbc :as sql-jdbc]
+    [sqlite-migrate.protocols :as p]
+    [sqlite-migrate.test-util :refer [thrown-info]]))
 
 (def declaration
   ["CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"

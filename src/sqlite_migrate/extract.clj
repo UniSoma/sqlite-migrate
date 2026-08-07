@@ -91,8 +91,8 @@
             (Character/isDigit c)
             (let [j (loop [j (inc i)]
                       (if (and (< j n)
-                               (let [d (.charAt src j)]
-                                 (or (Character/isLetterOrDigit d) (= d \.))))
+                            (let [d (.charAt src j)]
+                              (or (Character/isLetterOrDigit d) (= d \.))))
                         (recur (inc j))
                         j))]
               (recur j (conj acc {:t :num :s i :e j :text (subs src i j)})))
@@ -104,7 +104,7 @@
                         j))
                   text (subs src i j)]
               (if (and (= 1 (count text)) (or (= c \x) (= c \X))
-                       (< j n) (= (.charAt src j) \'))
+                    (< j n) (= (.charAt src j) \'))
                 (let [k (scan-quoted src (inc j) \')]
                   (recur k (conj acc {:t :blob :s i :e k :text (subs src i k)})))
                 (recur j (conj acc {:t :word :s i :e j :text text
@@ -189,8 +189,8 @@
                    :else (recur (inc i))))]
     (let [start (if (and (> d from) (word-at? toks (dec d) "not")) (dec d) d)
           stop (if (and (word-at? toks (inc d) "initially")
-                        (or (word-at? toks (+ d 2) "deferred")
-                            (word-at? toks (+ d 2) "immediate")))
+                     (or (word-at? toks (+ d 2) "deferred")
+                       (word-at? toks (+ d 2) "immediate")))
                  (+ d 2)
                  d)]
       (span-text src toks start stop))))
@@ -264,33 +264,33 @@
               "default" (let [[text j] (default-spelling src toks (inc i))]
                           (recur (long j) nil (assoc-in acc [:defaults col] text)))
               "collate" (recur (+ i 2) nil
-                               (assoc-in acc [:collates col] (:ident (get toks (inc i)))))
+                          (assoc-in acc [:collates col] (:ident (get toks (inc i)))))
               "as" (if (punct-at? toks (inc i) "(")
                      (let [close (match-paren toks (inc i))]
                        (recur (inc close) nil
-                              (assoc-in acc [:generated col]
-                                        (inner-text src toks (inc i) close))))
+                         (assoc-in acc [:generated col]
+                           (inner-text src toks (inc i) close))))
                      (recur (inc i) pending acc))
               "check" (if (punct-at? toks (inc i) "(")
                         (let [close (match-paren toks (inc i))]
                           (recur (inc close) nil
-                                 (update acc :checks conj
-                                         {:name pending
-                                          :expr (inner-text src toks (inc i) close)})))
+                            (update acc :checks conj
+                              {:name pending
+                               :expr (inner-text src toks (inc i) close)})))
                         (recur (inc i) pending acc))
               "references" (let [e (references-end toks i b)]
                              (recur e nil
-                                    (update acc :fks conj
-                                            {:name pending
-                                             :columns [(:ident (get toks a))]
-                                             :ref-table (:ident (get toks (inc i)))
-                                             :deferrable (deferrability src toks i e)})))
+                               (update acc :fks conj
+                                 {:name pending
+                                  :columns [(:ident (get toks a))]
+                                  :ref-table (:ident (get toks (inc i)))
+                                  :deferrable (deferrability src toks i e)})))
               "unique" (recur (inc i) nil
-                              (update acc :uniques conj
-                                      {:name pending
-                                       :columns [(:ident (get toks a))]}))
+                         (update acc :uniques conj
+                           {:name pending
+                            :columns [(:ident (get toks a))]}))
               "primary" (recur (inc i) nil
-                               (cond-> acc pending (assoc :pk-name pending)))
+                          (cond-> acc pending (assoc :pk-name pending)))
               "autoincrement" (recur (inc i) pending (assoc acc :autoincrement? true))
               (recur (inc i) pending acc))))))))
 
@@ -312,9 +312,9 @@
 
       "unique"
       (update acc :uniques conj
-              {:name cname
-               :columns (mapv (fn [[s _]] (:ident (get toks s)))
-                              (split-commas toks open close))})
+        {:name cname
+         :columns (mapv (fn [[s _]] (:ident (get toks s)))
+                    (split-commas toks open close))})
 
       "check"
       (update acc :checks conj {:name cname :expr (inner-text src toks open close)})
@@ -322,11 +322,11 @@
       "foreign"
       (let [r (find-word toks c b "references")]
         (update acc :fks conj
-                {:name cname
-                 :columns (mapv (fn [[s _]] (:ident (get toks s)))
-                                (split-commas toks open close))
-                 :ref-table (when r (:ident (get toks (inc r))))
-                 :deferrable (when r (deferrability src toks r b))}))
+          {:name cname
+           :columns (mapv (fn [[s _]] (:ident (get toks s)))
+                      (split-commas toks open close))
+           :ref-table (when r (:ident (get toks (inc r))))
+           :deferrable (when r (deferrability src toks r b))}))
 
       acc)))
 
@@ -352,11 +352,11 @@
       (reduce (fn [acc [a _ :as range]]
                 (let [tok (get toks a)]
                   (if (and (= :word (:t tok))
-                           (contains? constraint-openers (:fold tok)))
+                        (contains? constraint-openers (:fold tok)))
                     (table-constraint sql toks acc range)
                     (column-def sql toks acc range))))
-              init
-              (split-commas toks open close)))))
+        init
+        (split-commas toks open close)))))
 
 ;; ---------------------------------------------------------------------------
 ;; CREATE INDEX extraction
@@ -375,7 +375,7 @@
         segment (fn [[^long a ^long b]]
                   ;; strip trailing ASC|DESC, then COLLATE <name>
                   (let [b (if (or (word-at? toks (dec b) "asc")
-                                  (word-at? toks (dec b) "desc"))
+                                (word-at? toks (dec b) "desc"))
                             (dec b) b)
                         b (if (and (> (- b 2) a) (word-at? toks (- b 2) "collate"))
                             (- b 2) b)]
