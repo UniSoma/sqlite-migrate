@@ -1,12 +1,13 @@
 ---
 id: sqm-01kzbpngs10b
 title: sqlite-migrate design spec
-status: open
+status: closed
 type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-07T00:31:10.357693952Z'
+updated: '2026-08-07T00:42:39.410873440Z'
+closed: '2026-08-07T00:42:39.410873440Z'
 tags:
 - wayfinder:map
 ---
@@ -23,6 +24,10 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - **SQLite version**: assume the latest SQLite — everything on https://www.sqlite.org/lang_altertable.html as of today is available.
 - **Diff is a first-class public surface**, not internal machinery.
 - Every grilling ticket: invoke /grilling and /domain-modeling. Decisions accrue into CONTEXT.md (glossary) and docs/adr/ (hard-to-reverse choices); docs/spec.md is synthesized at the end.
+
+**2026-08-07T00:42:39.410873440Z**
+
+Destination reached: all 18 child tickets closed. Every design decision is locked in ADRs 0001-0014 + CONTEXT.md glossary, and the spec is synthesized (per user direction as a ticket, not docs/spec.md): sqm-01kzctnhwmjm 'Build sqlite-migrate v0.1.0 per the design spec' — the ready-for-agent handoff for the build effort.
 
 ## Decisions so far
 
@@ -43,10 +48,11 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Design the error and reporting model](sqm-01kzbppp1cjm) — one uniform ex-info envelope discriminated by the namespaced key :sqlite-migrate/error over an open add-only class set (launch: :malformed-input, :drift-refused, :unhandled-refused, :gate-failed, :sqlite-error with driver cause plus failing Op, plan index, and failing statement); payloads reuse existing values verbatim; renderers plan-report (full SQL always) and check-report join drift-report under "X-report = human rendering of X" (Check's data value renamed Check result); no message catalog, no severity field, no i18n; ex-message is a one-line summary — codes/classes are the stable machine surface, all strings presentation-only. ADR 0012; glossary terms Check result, Plan report, Check report, Non-success class.
 - [Design the public API surface](sqm-01kzbppnvjwb) — four public namespaces (core / protocol / JDBC adapter / schema, concrete names deferred to packaging); the effectful edge is one two-op protocol, SQLiteExecutor (execute-query → keyword-keyed row maps; execute-batch! → nil, owning the unconditional FK-off/txn/foreign_key_check/restore frame); database creation lives in adapter constructors, keeping every edge fn conn-first and conn-symmetric (declared-snapshot guards against non-empty databases); complete core inventory of 11 fns — no migrate! one-shot, no equivalent?; plan opts {:capabilities :directives} with capabilities defaulting to the live Snapshot's own version + :rebuild? true; schema ns exports only ->sql. ADR 0013; glossary terms Executor, Adapter, Frame.
 - [Decide packaging: coordinates, namespace names, release story](sqm-01kzcp3dwjay) — one artifact io.github.unisoma/sqlite-migrate with real JDBC deps (split is a later additive option); namespaces sqlite-migrate.core / .protocols / .jdbc / .schema (unprefixed root matching the ADR 0012 error key); SemVer accretion — 0.1.0-SNAPSHOT test channel → 0.x → 1.0.0 once the first consumer proves it, minor/patch only after; fully manual bb-task release mirroring mantine-ui-wrapper (build.clj version source of truth, deps-deploy, cljdoc trigger, v-tags on fixed releases); README + cljdoc articles; Graal = docs + CI native-image smoke, no binary; MIT. ADR 0014.
+- [Synthesize docs/spec.md from the closed map](sqm-01kzbppp4bsb) — per user direction the spec was published as a ticket rather than docs/spec.md: [Build sqlite-migrate v0.1.0 per the design spec](sqm-01kzctnhwmjm) (epic, ready-for-agent), synthesized from CONTEXT.md + ADRs 0001–0014 — problem, solution, 34 user stories, full implementation and testing decisions, out-of-scope list. The map is complete; the build effort starts from that ticket.
 
 ## Not yet specified
 
-- Shape of the follow-on build effort (includes picking the concrete CI version-matrix floor per ADR 0010).
+Nothing — the map is complete. The follow-on build effort is handed off as [Build sqlite-migrate v0.1.0 per the design spec](sqm-01kzctnhwmjm); the concrete CI version-matrix floor (ADR 0010) is called out there as a build-time choice.
 
 ## Out of scope
 
