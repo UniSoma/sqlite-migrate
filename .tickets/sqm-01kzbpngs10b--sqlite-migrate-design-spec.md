@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: afk
 created: '2026-08-06T14:12:06.048909188Z'
-updated: '2026-08-06T23:22:25.044443075Z'
+updated: '2026-08-07T00:31:10.357693952Z'
 tags:
 - wayfinder:map
 ---
@@ -42,6 +42,7 @@ A design spec for `sqlite-migrate`: a general open-source, data-driven Clojure l
 - [Decide execution policies: atomicity, destructiveness, stage-then-swap](sqm-01kzbppnrsqa) — Apply is strictly atomic in place: one transaction frame, all-or-nothing, no non-atomic variants; stage-then-swap ruled out as an Apply mode (consumer recipe instead); no run-time destructive guard beyond directives; success returns a plain-EDN Apply report (both Snapshot metadata blocks, gate report when checked, ops executed, post-apply schema_version), every non-success throws ex-info with structured data; opts exactly :allow-unhandled? (default false) and :check-gates? (default true); no drift :force override. ADR 0011; glossary Apply sharpened, Apply report added.
 - [Design the error and reporting model](sqm-01kzbppp1cjm) — one uniform ex-info envelope discriminated by the namespaced key :sqlite-migrate/error over an open add-only class set (launch: :malformed-input, :drift-refused, :unhandled-refused, :gate-failed, :sqlite-error with driver cause plus failing Op, plan index, and failing statement); payloads reuse existing values verbatim; renderers plan-report (full SQL always) and check-report join drift-report under "X-report = human rendering of X" (Check's data value renamed Check result); no message catalog, no severity field, no i18n; ex-message is a one-line summary — codes/classes are the stable machine surface, all strings presentation-only. ADR 0012; glossary terms Check result, Plan report, Check report, Non-success class.
 - [Design the public API surface](sqm-01kzbppnvjwb) — four public namespaces (core / protocol / JDBC adapter / schema, concrete names deferred to packaging); the effectful edge is one two-op protocol, SQLiteExecutor (execute-query → keyword-keyed row maps; execute-batch! → nil, owning the unconditional FK-off/txn/foreign_key_check/restore frame); database creation lives in adapter constructors, keeping every edge fn conn-first and conn-symmetric (declared-snapshot guards against non-empty databases); complete core inventory of 11 fns — no migrate! one-shot, no equivalent?; plan opts {:capabilities :directives} with capabilities defaulting to the live Snapshot's own version + :rebuild? true; schema ns exports only ->sql. ADR 0013; glossary terms Executor, Adapter, Frame.
+- [Decide packaging: coordinates, namespace names, release story](sqm-01kzcp3dwjay) — one artifact io.github.unisoma/sqlite-migrate with real JDBC deps (split is a later additive option); namespaces sqlite-migrate.core / .protocols / .jdbc / .schema (unprefixed root matching the ADR 0012 error key); SemVer accretion — 0.1.0-SNAPSHOT test channel → 0.x → 1.0.0 once the first consumer proves it, minor/patch only after; fully manual bb-task release mirroring mantine-ui-wrapper (build.clj version source of truth, deps-deploy, cljdoc trigger, v-tags on fixed releases); README + cljdoc articles; Graal = docs + CI native-image smoke, no binary; MIT. ADR 0014.
 
 ## Not yet specified
 
