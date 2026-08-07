@@ -14,6 +14,10 @@ Triage roles map to knot tags, except agent/human readiness, which maps to knot'
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Clojure style
+
+Before writing or reviewing Clojure: the `:sqlite-migrate/error` ex-info taxonomy, normative docstrings, naming, interop, comments, and how tests are shaped. See `docs/agents/clojure-style.md`.
+
 ## REPL-driven development
 
 - **Drive the REPL instead of write-run-debug cycles.** Use the `clojure-mcp` tools, not Bash; port 7888 is canonical (start it with `clojure -M:nrepl`).
