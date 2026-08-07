@@ -25,14 +25,16 @@
 
 (defn- run-frame!
   "The unconditional Frame of `execute-batch!` (see the protocol docstring):
-  FK enforcement off outside the transaction, BEGIN, statements in order,
+  FK enforcement off outside the transaction, BEGIN, `pre-check!` (when
+  supplied) inside the open transaction, statements in order,
   foreign_key_check, COMMIT, prior FK setting restored in a finally."
-  [^Connection connection statements]
+  [^Connection connection statements pre-check!]
   (let [fk-was-on? (foreign-keys-on? connection)]
     (raw-exec! connection "PRAGMA foreign_keys=OFF")
     (try
       (raw-exec! connection "BEGIN")
       (try
+        (when pre-check! (pre-check!))
         (doseq [[i s] (map-indexed vector statements)]
           (try
             (raw-exec! connection s)
@@ -62,7 +64,9 @@
   (execute-query [_ sql params]
     (query connection sql params))
   (execute-batch! [_ statements]
-    (run-frame! connection statements))
+    (run-frame! connection statements nil))
+  (execute-batch! [_ statements pre-check!]
+    (run-frame! connection statements pre-check!))
   java.io.Closeable
   (close [_]
     (.close connection)))

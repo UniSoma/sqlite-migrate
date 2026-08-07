@@ -5,8 +5,8 @@
   (:require [clojure.test :refer [deftest is testing]]
     [sqlite-migrate.core :as m]
     [sqlite-migrate.corpus :as corpus]
-    [sqlite-migrate.jdbc :as sql-jdbc]
     [sqlite-migrate.impl.plan :as pl]
+    [sqlite-migrate.jdbc :as sql-jdbc]
     [sqlite-migrate.protocols :as p]
     [sqlite-migrate.test-util :refer [thrown-info]]))
 
@@ -92,30 +92,30 @@
 (deftest column-level-constraint-spellings-are-never-silently-dropped
   ;; a column-level UNIQUE or REFERENCES surfaces as its own constraint
   ;; entry, which is rebuild-only and collapses the table — the
-  ;; :add-column op (which cannot carry those clauses) never emits
-  (testing "an added column with a column-level UNIQUE routes the table to unhandled"
+  ;; :add-column op (which cannot carry those clauses) never emits;
+  ;; the rebuild's CREATE carries the constraint spelling verbatim
+  (testing "an added column with a column-level UNIQUE routes the table to a rebuild"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
                ["CREATE TABLE t (a INTEGER, b TEXT UNIQUE)"])]
-      (is (empty? (:ops pl)))
-      (is (= {[:table "t" :column "b"] [[:incapable :rebuild-not-implemented]]
-              [:table "t" :unique [:declared 0]] [[:incapable :rebuild-not-implemented]]}
-            (refusal-codes pl)))))
-  (testing "an added column with a column-level REFERENCES routes the table to unhandled"
+      (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+      (is (= [#{[:table "t" :column "b"] [:table "t" :unique [:declared 0]]}]
+            (mapv :serves (:ops pl))))
+      (is (empty? (:unhandled pl)))))
+  (testing "an added column with a column-level REFERENCES routes the table to a rebuild"
     (let [pl (plan-of ["CREATE TABLE p (id INTEGER PRIMARY KEY)" "CREATE TABLE t (a INTEGER)"]
                ["CREATE TABLE p (id INTEGER PRIMARY KEY)"
                 "CREATE TABLE t (a INTEGER, b INTEGER REFERENCES p(id))"])]
-      (is (empty? (:ops pl)))
-      (is (= {[:table "t" :column "b"] [[:incapable :rebuild-not-implemented]]
-              [:table "t" :foreign-key [:declared 0]] [[:incapable :rebuild-not-implemented]]}
-            (refusal-codes pl))))))
+      (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+      (is (= [#{[:table "t" :column "b"] [:table "t" :foreign-key [:declared 0]]}]
+            (mapv :serves (:ops pl))))
+      (is (empty? (:unhandled pl))))))
 
 (deftest mid-table-column-insertion-is-rebuild-only
   (let [pl (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)"]
              ["CREATE TABLE t (a INTEGER, x INT, b TEXT)"])]
-    (testing "a column inserted mid-table cannot append in place — honestly unhandled"
-      (is (empty? (:ops pl)))
-      (is (= {[:table "t" :column "x"] [[:incapable :rebuild-not-implemented]]}
-            (refusal-codes pl))))
+    (testing "a column inserted mid-table cannot append in place — it plans as a rebuild"
+      (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+      (is (empty? (:unhandled pl))))
     (testing "with :rebuild? false the code is :rebuild-disabled"
       (is (= {[:table "t" :column "x"] [[:incapable :rebuild-disabled]]}
             (refusal-codes
@@ -137,10 +137,10 @@
       (is (= [[:drop-not-null ["ALTER TABLE \"t\" ALTER COLUMN \"b\" DROP NOT NULL"]]]
             (kinds+sql (plan-of declared live))))
       (is (converges? declared live)))
-    (testing "below 3.53 the only route is a rebuild — honestly unhandled"
-      (is (= {[:table "t" :column "b"] [[:incapable :rebuild-not-implemented]]}
-            (refusal-codes (plan-of live declared
-                             {:capabilities {:sqlite-version "3.45.0"}})))))))
+    (testing "below 3.53 the version gap is absorbed by a rebuild — no refusal (ADR 0007)"
+      (is (= [:rebuild-table]
+            (mapv :kind (:ops (plan-of live declared
+                                {:capabilities {:sqlite-version "3.45.0"}}))))))))
 
 (deftest check-constraints-plan-behind-the-target-version-gate
   (testing "a changed named CHECK plans as drop-then-add, both serving the entry"
@@ -159,15 +159,15 @@
       (is (= [[:add-check ["ALTER TABLE \"t\" ADD CHECK (a > 0)"]]]
             (kinds+sql (plan-of live declared))))
       (is (converges? live declared))))
-  (testing "a removed unnamed CHECK cannot be addressed in place — rebuild only"
-    (is (= {[:table "t" :check [:live 0]] [[:incapable :rebuild-not-implemented]]}
-          (refusal-codes (plan-of ["CREATE TABLE t (a INTEGER, CHECK (a > 0))"]
-                           ["CREATE TABLE t (a INTEGER)"])))))
-  (testing "below 3.53 check changes are rebuild-only"
-    (is (= {[:table "t" :check "c1"] [[:incapable :rebuild-not-implemented]]}
-          (refusal-codes (plan-of ["CREATE TABLE t (a INTEGER, CONSTRAINT c1 CHECK (a > 0))"]
-                           ["CREATE TABLE t (a INTEGER)"]
-                           {:capabilities {:sqlite-version "3.45.0"}}))))))
+  (testing "a removed unnamed CHECK cannot be addressed in place — it plans as a rebuild"
+    (is (= [:rebuild-table]
+          (mapv :kind (:ops (plan-of ["CREATE TABLE t (a INTEGER, CHECK (a > 0))"]
+                              ["CREATE TABLE t (a INTEGER)"]))))))
+  (testing "below 3.53 check changes rebuild — the version gap is absorbed (ADR 0007)"
+    (is (= [:rebuild-table]
+          (mapv :kind (:ops (plan-of ["CREATE TABLE t (a INTEGER, CONSTRAINT c1 CHECK (a > 0))"]
+                              ["CREATE TABLE t (a INTEGER)"]
+                              {:capabilities {:sqlite-version "3.45.0"}})))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Index, trigger, and view create/drop
@@ -246,13 +246,12 @@
   ;; route to the rebuild path instead of failing at apply time
   (let [live ["CREATE TABLE t (a INTEGER, g INTEGER GENERATED ALWAYS AS (a * 2) VIRTUAL)"
               "CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT g FROM t; END"]]
-    (testing "a trigger that survives the plan's drops blocks the in-place drop"
+    (testing "a trigger that survives the plan's drops blocks the in-place drop — the table rebuilds"
       (let [pl (plan-of live
                  ["CREATE TABLE t (a INTEGER)"
                   "CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT g FROM t; END"])]
-        (is (empty? (:ops pl)))
-        (is (= {[:table "t" :column "g"] [[:incapable :rebuild-not-implemented]]}
-              (refusal-codes pl)))))
+        (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+        (is (empty? (:unhandled pl)))))
     (testing "dropping the trigger in phase 1 legalizes the drop-column"
       (let [declared ["CREATE TABLE t (a INTEGER)"]
             pl (plan-of live declared)]
@@ -275,17 +274,19 @@
 
 (deftest foreign-key-column-drops-are-rebuild-only
   ;; SQLite rejects DROP COLUMN on a column named in a FOREIGN KEY
-  ;; clause; the vanishing FK is its own rebuild-only entry, so the
-  ;; whole table honestly collapses to unhandled
+  ;; clause; the vanishing FK routes the table to a rebuild, but the
+  ;; destructive column drop still awaits intent — so the whole table
+  ;; honestly collapses to unhandled and both entries carry the
+  ;; blocking Refusal
   (let [pl (plan-of ["CREATE TABLE p (id INTEGER PRIMARY KEY)"
                      "CREATE TABLE t (a INTEGER, b INTEGER, FOREIGN KEY (b) REFERENCES p(id))"]
              ["CREATE TABLE p (id INTEGER PRIMARY KEY)"
               "CREATE TABLE t (a INTEGER)"])]
     (is (empty? (:ops pl)))
     (is (= {[:table "t" :column "b"]
-            [[:needs-intent :destructive-drop] [:incapable :rebuild-not-implemented]]
+            [[:needs-intent :destructive-drop]]
             [:table "t" :foreign-key [:live 0]]
-            [[:incapable :rebuild-not-implemented]]}
+            [[:needs-intent :destructive-drop]]}
           (refusal-codes pl)))))
 
 (deftest data-bearing-column-drops-need-intent
@@ -295,9 +296,9 @@
       (is (empty? (:ops pl)))
       (is (= {[:table "t" :column "b"] [[:needs-intent :destructive-drop]]}
             (refusal-codes pl)))))
-  (testing "below 3.35 the drop also needs a rebuild — both Refusals ride the entry"
+  (testing "below 3.35 the drop routes through a rebuild but the intent is still owed"
     (is (= {[:table "t" :column "b"]
-            [[:needs-intent :destructive-drop] [:incapable :rebuild-not-implemented]]}
+            [[:needs-intent :destructive-drop]]}
           (refusal-codes (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)"]
                            ["CREATE TABLE t (a INTEGER)"]
                            {:capabilities {:sqlite-version "3.30.0"}}))))))
@@ -306,9 +307,9 @@
 ;; Refusals: every applicable launch code, plan never throws
 
 (deftest refusal-vectors-carry-every-applicable-code
-  (testing "changing a table to STRICT below 3.37: unsupported object AND rebuild-only"
+  (testing "changing a table to STRICT below 3.37: the rebuild would create an unsupported object"
     (is (= {[:table "t"]
-            [[:incapable :unsupported-by-target-version] [:incapable :rebuild-not-implemented]]}
+            [[:incapable :unsupported-by-target-version]]}
           (refusal-codes (plan-of ["CREATE TABLE t (a INTEGER)"]
                            ["CREATE TABLE t (a INTEGER) STRICT"]
                            {:capabilities {:sqlite-version "3.30.0"}})))))
@@ -339,18 +340,17 @@
 
 (deftest one-rebuild-only-entry-collapses-the-whole-table
   ;; ADR 0006: never mix in-place and rebuild for one table — the
-  ;; appendable column goes unhandled too once its sibling needs a rebuild
+  ;; appendable column rides the same rebuild as its rebuild-only sibling
   (let [pl (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)"]
              ["CREATE TABLE t (a INTEGER, b BLOB, c INT)"])]
-    (is (empty? (:ops pl)))
-    (is (= {[:table "t" :column "b"] [[:incapable :rebuild-not-implemented]]
-            [:table "t" :column "c"] [[:incapable :rebuild-not-implemented]]}
-          (refusal-codes pl))))
+    (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+    (is (= [#{[:table "t" :column "b"] [:table "t" :column "c"]}]
+          (mapv :serves (:ops pl))))
+    (is (empty? (:unhandled pl))))
   (testing "an unrelated table still plans in place — collapse is per table"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)" "CREATE TABLE u (x INTEGER)"]
                ["CREATE TABLE t (a INTEGER, b BLOB)" "CREATE TABLE u (x INTEGER, y INT)"])]
-      (is (= [[:add-column ["ALTER TABLE \"u\" ADD COLUMN \"y\" INT"]]]
-            (kinds+sql pl))))))
+      (is (= [:rebuild-table :add-column] (mapv :kind (:ops pl)))))))
 
 (deftest plan-never-throws-for-refusals
   (testing "the whole nasty corpus against an empty declaration plans without throwing"

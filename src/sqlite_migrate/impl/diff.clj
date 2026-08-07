@@ -291,6 +291,26 @@
       [(changed-entry [:view (:name d)] l d facts)])))
 
 ;; ---------------------------------------------------------------------------
+;; Planner-facing seams (ADR 0009): the Diff itself stays a pure state
+;; delta — these exist so the planner can compare a fused rename pair
+;; without a resolved-Diff intermediate.
+
+(defn fused-entries
+  "The fine-grained entries comparing a fused rename pair (ADR 0009):
+  a live table and a declared table whose names differ, compared
+  exactly as a changed table is, paths rooted at the declared name.
+  Planner-internal — these entries never appear in a Diff."
+  [live-table declared-table]
+  (vec (table-entries live-table declared-table)))
+
+(defn fused-column-facts
+  "The differing fact keywords between a live column and the declared
+  column a rename directive binds it to (ADR 0009) — the same fact
+  comparison a changed column gets, the name difference excluded."
+  [live-col declared-col]
+  (column-facts live-col declared-col))
+
+;; ---------------------------------------------------------------------------
 ;; The Diff
 
 (defn diff

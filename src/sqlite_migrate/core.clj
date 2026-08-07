@@ -1,11 +1,14 @@
 (ns sqlite-migrate.core
-  "The sqlite-migrate pipeline: snapshot -> diff -> plan -> apply!.
+  "The sqlite-migrate pipeline: snapshot -> diff -> plan -> check -> apply!.
 
   Introspects live and declared schemas into verbatim Snapshots, diffs
   them under the full Diff model (fine-grained entries inside changed
   tables — ADR 0003, 0004), and plans in-place ops with honest Refusals
-  for everything that needs a rebuild (ADR 0006, 0007). Every effectful
-  edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
+  for everything that needs a rebuild (ADR 0006, 0007). `check` runs
+  the Plan's Gates — its data preconditions — read-only as a
+  pre-flight; `apply!` checks them by default inside the Frame (ADR
+  0008, 0011). Every effectful edge speaks to a
+  `sqlite-migrate.protocols/SQLiteExecutor`."
   (:require [clojure.string :as str]
     [sqlite-migrate.impl.diff :as d]
     [sqlite-migrate.impl.extract :as x]
@@ -265,15 +268,80 @@
 (defn plan
   "Plan a Diff into an ordered, self-contained Plan: `{:ops [...]
   :unhandled [...] :live-metadata ... :declared-metadata ...
-  :capabilities ...}` — list position is execution order, every Diff
-  entry either served by ≥1 op or honestly unhandled with its full
-  Refusal vector, byte-identical for identical inputs. Opts:
-  `:capabilities` (defaults: the live Snapshot's SQLite version plus
-  `:rebuild? true`) and `:live-snapshot`/`:declared-snapshot` (required
+  :capabilities ... :directives [...] :unused-directives [...]}` —
+  list position is execution order, every Diff entry either served by
+  ≥1 op or honestly unhandled with its full Refusal vector,
+  byte-identical for identical inputs. Opts: `:capabilities`
+  (defaults: the live Snapshot's SQLite version plus `:rebuild?
+  true`), `:directives` (the intent channel, ADR 0009 — per-object
+  Directive maps that lift `:needs-intent` refusals: `:rename-table`,
+  `:rename-column`, `:drop-table`, `:drop-column`; a conflicting set
+  throws `:malformed-input`, an unmatched directive is inert and
+  reported under `:unused-directives` in input order, and apply! never
+  consults them), and `:live-snapshot`/`:declared-snapshot` (required
   planning context whenever the Diff contains a changed table). See
-  `sqlite-migrate.impl.plan/plan` for the full contract (ADR 0006, 0007)."
+  `sqlite-migrate.impl.plan/plan` for the full contract (ADR 0006,
+  0007, 0009)."
   ([diff] (plan diff {}))
   ([diff opts] (pl/plan diff opts)))
+
+;; ---------------------------------------------------------------------------
+;; Check (ADR 0008)
+
+(defn- verify-fingerprint!
+  "Throw `:drift-refused` when the live `schema_version` fingerprint no
+  longer matches `plan`'s source Snapshot metadata — the plan's SQL
+  (gate SQL included) was compiled against a schema that no longer
+  exists. No override; the remedy is re-diff, re-plan."
+  [conn plan]
+  (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
+        live-fingerprint (current-fingerprint conn)]
+    (when (not= plan-fingerprint live-fingerprint)
+      (throw (ex-info (str "live schema_version " live-fingerprint
+                        " does not match the plan's source fingerprint "
+                        plan-fingerprint)
+               {:sqlite-migrate/error :drift-refused
+                :plan-fingerprint plan-fingerprint
+                :live-fingerprint live-fingerprint
+                :live-metadata (:live-metadata plan)
+                :declared-metadata (:declared-metadata plan)})))))
+
+(defn- run-gates
+  "Run every Gate of `plan` verbatim over `conn`'s query path and
+  return the Check result: `{:pass? bool :gates [...]}`, one result map
+  per Gate in op order — the Gate itself under `:gate`, its op's plan
+  index, `:pass?`, the sampled `:violations` count, `:more?` when the
+  count hit the Gate's baked limit (\"limit or more\"), and the
+  violating `:sample-rows` (row order is SQLite's — outside the
+  determinism contract, ADR 0008)."
+  [conn plan]
+  (let [results (vec (for [[op-index op] (map-indexed vector (:ops plan))
+                           gate (:gates op)]
+                       (let [rows (p/execute-query conn (:sql gate) [])
+                             n (count rows)]
+                         {:gate gate
+                          :op-index op-index
+                          :pass? (zero? n)
+                          :violations n
+                          :more? (= n (:limit gate))
+                          :sample-rows rows})))]
+    {:pass? (every? :pass? results) :gates results}))
+
+(defn check
+  "Run every Gate of `plan` read-only against `conn` and return the
+  Check result — the pre-flight over the plan's data preconditions
+  (ADR 0008): `{:pass? bool :gates [...]}`, one result map per Gate in
+  op order — the Gate itself under `:gate`, its op's plan index
+  (`:op-index`), `:pass?`, the sampled `:violations` count, `:more?`
+  when the count hit the Gate's baked limit (\"limit or more\"), and
+  the violating `:sample-rows` (row order is SQLite's — outside the
+  determinism contract). Refuses (`:drift-refused`, no override) when the
+  live `schema_version` fingerprint no longer matches the Plan's
+  source Snapshot metadata. Never mutates the database; SQLite's own
+  enforcement remains the backstop."
+  [conn plan]
+  (verify-fingerprint! conn plan)
+  (run-gates conn plan))
 
 ;; ---------------------------------------------------------------------------
 ;; Apply
@@ -296,10 +364,16 @@
   no override) when the live `schema_version` fingerprint no longer
   matches the Plan's source Snapshot metadata; refuses
   (`:unhandled-refused`) when the Plan has unhandled entries and
-  `:allow-unhandled?` is not set. A mid-apply SQLite failure throws
+  `:allow-unhandled?` is not set. By default every Gate is checked
+  up-front once the Frame's transaction is open (TOCTOU-free — ADR
+  0008); a failing Gate rolls back and throws `:gate-failed` carrying
+  the Check result verbatim under `:check`. `:check-gates? false` opts
+  out (ADR 0011) — for the operator who just ran `check` and wants to
+  skip a second full scan. A mid-apply SQLite failure throws
   `:sqlite-error` carrying the failing Op verbatim, its plan index
   (`:op-index`), and the specific SQL statement that failed. Returns a
-  minimal Apply report; throws on every non-success."
+  minimal Apply report — the Check result rides it under `:check`,
+  absent when gate-checking was skipped; throws on every non-success."
   ([conn plan] (apply! conn plan {}))
   ([conn plan opts]
     (when (and (seq (:unhandled plan)) (not (:allow-unhandled? opts)))
@@ -309,19 +383,24 @@
                           " and :allow-unhandled? is not set")
                  {:sqlite-migrate/error :unhandled-refused
                   :unhandled (:unhandled plan)}))))
-    (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
-          live-fingerprint (current-fingerprint conn)]
-      (when (not= plan-fingerprint live-fingerprint)
-        (throw (ex-info (str "live schema_version " live-fingerprint
-                          " does not match the plan's source fingerprint "
-                          plan-fingerprint)
-                 {:sqlite-migrate/error :drift-refused
-                  :plan-fingerprint plan-fingerprint
-                  :live-fingerprint live-fingerprint
-                  :live-metadata (:live-metadata plan)
-                  :declared-metadata (:declared-metadata plan)})))
+    (verify-fingerprint! conn plan)
+    (let [check-gates? (not (false? (:check-gates? opts)))
+          checked (volatile! nil)
+          pre-check! (when check-gates?
+                       (fn []
+                         (let [result (run-gates conn plan)]
+                           (vreset! checked result)
+                           (when-not (:pass? result)
+                             (let [n (count (remove :pass? (:gates result)))]
+                               (throw (ex-info (str n " of " (count (:gates result))
+                                                 " gates failed; nothing was applied")
+                                        {:sqlite-migrate/error :gate-failed
+                                         :check result})))))))
+          statements (into [] (mapcat :sql) (:ops plan))]
       (try
-        (p/execute-batch! conn (into [] (mapcat :sql) (:ops plan)))
+        (if pre-check!
+          (p/execute-batch! conn statements pre-check!)
+          (p/execute-batch! conn statements))
         (catch Exception e
           (let [data (ex-data e)
                 located (when-let [i (:statement-index data)]
@@ -344,5 +423,6 @@
               (throw (ex-info "SQLite error during apply"
                        {:sqlite-migrate/error :sqlite-error}
                        e))))))
-      (assoc (select-keys plan [:live-metadata :declared-metadata :ops])
-        :schema-version (current-fingerprint conn)))))
+      (cond-> (assoc (select-keys plan [:live-metadata :declared-metadata :ops])
+                :schema-version (current-fingerprint conn))
+        check-gates? (assoc :check @checked)))))
