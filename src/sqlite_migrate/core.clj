@@ -1,12 +1,15 @@
 (ns sqlite-migrate.core
   "The sqlite-migrate pipeline: snapshot -> diff -> plan -> apply!.
 
-  Walking-skeleton width: plain tables and columns only, diffed at
-  added/removed-table granularity, planned as :create-table ops. Every
-  effectful edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
-  (:require [clojure.set :as set]
-    [clojure.string :as str]
+  Introspects live and declared schemas into verbatim Snapshots, diffs
+  them under the full Diff model (fine-grained entries inside changed
+  tables — ADR 0003, 0004), and plans in-place ops with honest Refusals
+  for everything that needs a rebuild (ADR 0006, 0007). Every effectful
+  edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
+  (:require [clojure.string :as str]
+    [sqlite-migrate.diff :as d]
     [sqlite-migrate.extract :as x]
+    [sqlite-migrate.plan :as pl]
     [sqlite-migrate.protocols :as p]))
 
 ;; ---------------------------------------------------------------------------
@@ -238,25 +241,21 @@
 
 (defn diff
   "Compare two Snapshots (live, declared) into a Diff: a flat `:entries`
-  sequence plus both sides' Snapshot metadata. Skeleton granularity:
-  added/removed tables by name."
+  vector plus both sides' Snapshot metadata. Each entry is one
+  self-contained Semantic difference — target-relative `:kind`
+  (:added/:removed/:changed), `:path`, both sides' verbatim sub-values
+  with stored CREATE sql embedded, and for :changed the `:facts` set —
+  in a locked deterministic order, plain EDN all the way down. Empty
+  `:entries` iff the Snapshots are Equivalent. See
+  `sqlite-migrate.diff/diff` for the full contract (ADR 0003, 0004)."
   [live declared]
-  (let [live-names (set (keys (:tables live)))
-        declared-names (set (keys (:tables declared)))
-        entries (vec (concat
-                       (for [n (sort (set/difference live-names declared-names))]
-                         {:kind :removed
-                          :path [:table n]
-                          :live (get-in live [:tables n])
-                          :declared nil})
-                       (for [n (sort (set/difference declared-names live-names))]
-                         {:kind :added
-                          :path [:table n]
-                          :live nil
-                          :declared (get-in declared [:tables n])})))]
-    {:entries entries
-     :live-metadata (meta live)
-     :declared-metadata (meta declared)}))
+  (d/diff live declared))
+
+(defn equivalent?
+  "The Equivalence relation over two Snapshots: true when their Diff
+  has no entries (ADR 0003)."
+  [live declared]
+  (d/equivalent? live declared))
 
 (defn drift?
   "True when `diff` has entries — the live schema is not Equivalent to
@@ -268,37 +267,17 @@
 ;; Plan
 
 (defn plan
-  "Plan a Diff into an ordered, self-contained Plan. Opts:
-  `{:capabilities ...}` — omitted capabilities default to the live side's
-  Snapshot-metadata SQLite version plus `:rebuild? true`.
-
-  Skeleton width: `:added` table entries become `:create-table` ops (SQL
-  compiled at plan time from the declared side's stored CREATE sql),
-  name-sorted; `:removed` entries go to `:unhandled` with a
-  `:needs-intent` Refusal."
+  "Plan a Diff into an ordered, self-contained Plan: `{:ops [...]
+  :unhandled [...] :live-metadata ... :declared-metadata ...
+  :capabilities ...}` — list position is execution order, every Diff
+  entry either served by ≥1 op or honestly unhandled with its full
+  Refusal vector, byte-identical for identical inputs. Opts:
+  `:capabilities` (defaults: the live Snapshot's SQLite version plus
+  `:rebuild? true`) and `:live-snapshot`/`:declared-snapshot` (required
+  planning context whenever the Diff contains a changed table). See
+  `sqlite-migrate.plan/plan` for the full contract (ADR 0006, 0007)."
   ([diff] (plan diff {}))
-  ([diff opts]
-    (let [capabilities (merge {:sqlite-version (get-in diff [:live-metadata :sqlite-version])
-                               :rebuild? true}
-                         (:capabilities opts))
-          {added :added removed :removed} (group-by :kind (:entries diff))
-          ops (vec (for [entry (sort-by #(second (:path %)) added)]
-                     {:kind :create-table
-                      :path (:path entry)
-                      :serves #{(:path entry)}
-                      :sql [(:sql (meta (:declared entry)))]}))
-          unhandled (vec (for [entry removed]
-                           {:entry entry
-                            :refusals [{:class :needs-intent
-                                        :code :drop-table
-                                        :explanation (str "dropping table "
-                                                       (second (:path entry))
-                                                       " requires an explicit drop directive")}]}))]
-      {:ops ops
-       :unhandled unhandled
-       :live-metadata (:live-metadata diff)
-       :declared-metadata (:declared-metadata diff)
-       :capabilities capabilities})))
+  ([diff opts] (pl/plan diff opts)))
 
 ;; ---------------------------------------------------------------------------
 ;; Apply

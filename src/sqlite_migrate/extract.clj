@@ -37,6 +37,28 @@
           (inc j))
         :else (recur (inc j))))))
 
+(defn- scan-number
+  "Position just past the numeric literal starting at `i`: digits,
+  dots, hex digits after a `0x` prefix, and a signed exponent
+  (`1e+5`) — the sign is consumed only when the literal is not hex,
+  follows an `e`/`E`, and is itself followed by a digit."
+  ^long [^String src ^long i]
+  (let [n (.length src)
+        hex? (and (= \0 (.charAt src i)) (< (inc i) n)
+               (let [x (.charAt src (inc i))] (or (= x \x) (= x \X))))]
+    (loop [j (inc i)]
+      (if (>= j n)
+        j
+        (let [d (.charAt src j)]
+          (cond
+            (or (Character/isLetterOrDigit d) (= d \.)) (recur (inc j))
+            (and (or (= d \+) (= d \-))
+              (not hex?)
+              (let [p (.charAt src (dec j))] (or (= p \e) (= p \E)))
+              (< (inc j) n)
+              (Character/isDigit (.charAt src (inc j)))) (recur (inc j))
+            :else j))))))
+
 (defn- word-start? [c]
   (or (Character/isLetter (char c)) (= c \_)))
 
@@ -86,13 +108,10 @@
               (recur j (conj acc {:t :qid :s i :e j :text (subs src i j)
                                   :ident ident :fold (fold-name ident)})))
 
-            (Character/isDigit c)
-            (let [j (long (loop [j (inc i)]
-                            (if (and (< j n)
-                                  (let [d (.charAt src j)]
-                                    (or (Character/isLetterOrDigit d) (= d \.))))
-                              (recur (inc j))
-                              j)))]
+            (or (Character/isDigit c)
+              (and (= c \.) (< (inc i) n)
+                (Character/isDigit (.charAt src (inc i)))))
+            (let [j (scan-number src i)]
               (recur j (conj acc {:t :num :s i :e j :text (subs src i j)})))
 
             (word-start? c)
