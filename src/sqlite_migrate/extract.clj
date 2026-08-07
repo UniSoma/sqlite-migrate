@@ -89,19 +89,19 @@
                                   :ident ident :fold (lower ident)})))
 
             (Character/isDigit c)
-            (let [j (loop [j (inc i)]
-                      (if (and (< j n)
-                            (let [d (.charAt src j)]
-                              (or (Character/isLetterOrDigit d) (= d \.))))
-                        (recur (inc j))
-                        j))]
+            (let [j (long (loop [j (inc i)]
+                            (if (and (< j n)
+                                  (let [d (.charAt src j)]
+                                    (or (Character/isLetterOrDigit d) (= d \.))))
+                              (recur (inc j))
+                              j)))]
               (recur j (conj acc {:t :num :s i :e j :text (subs src i j)})))
 
             (word-start? c)
-            (let [j (loop [j (inc i)]
-                      (if (and (< j n) (word-char? (.charAt src j)))
-                        (recur (inc j))
-                        j))
+            (let [j (long (loop [j (inc i)]
+                            (if (and (< j n) (word-char? (.charAt src j)))
+                              (recur (inc j))
+                              j)))
                   text (subs src i j)]
               (if (and (= 1 (count text)) (or (= c \x) (= c \X))
                     (< j n) (= (.charAt src j) \'))
@@ -126,7 +126,7 @@
 
 (defn- match-paren
   "Index of the `)` matching the `(` at `open`."
-  [toks ^long open]
+  ^long [toks ^long open]
   (loop [i (inc open) depth 0]
     (cond
       (>= i (count toks)) i

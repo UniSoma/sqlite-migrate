@@ -1,5 +1,9 @@
 {:tasks
- {pre_start
+ {test
+  {:doc "Run the test suite via cognitect test-runner (clojure -X:test)."
+   :task (shell "clojure" "-X:test")}
+
+  pre_start
   {:doc "Start dev daemons (idempotent) — nREPL :7888. Backs `bb pre_start` in .aishell/config.yaml."
    :requires ([babashka.process :as p]
               [clojure.string :as str])
