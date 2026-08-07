@@ -5,7 +5,7 @@
   on Snapshots taken from real in-memory SQLite."
   (:require [clojure.test :refer [are deftest is testing]]
     [sqlite-migrate.core :as m]
-    [sqlite-migrate.extract :as x]
+    [sqlite-migrate.impl.extract :as x]
     [sqlite-migrate.jdbc :as sql-jdbc]))
 
 (defn- snap

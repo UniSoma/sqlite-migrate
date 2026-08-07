@@ -1,4 +1,4 @@
-(ns sqlite-migrate.plan
+(ns sqlite-migrate.impl.plan
   "The pure planner (ADR 0006, 0007): Diff entries in, an ordered,
   self-contained Plan out — every entry either served by ops or honestly
   unhandled with its full Refusal vector. Never throws for refusals;
@@ -31,7 +31,7 @@
   to the live Snapshot's) plus `:rebuild?` (default true). A nil target
   version means \"latest\": every version gate passes."
   (:require [clojure.string :as str]
-    [sqlite-migrate.extract :as x]))
+    [sqlite-migrate.impl.extract :as x]))
 
 (set! *warn-on-reflection* true)
 

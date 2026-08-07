@@ -1,4 +1,4 @@
-(ns sqlite-migrate.extract
+(ns sqlite-migrate.impl.extract
   "The narrow extractor (ADR 0001): lifts the pragma-invisible facts out
   of stored CREATE text as verbatim opaque expression text — CHECK
   bodies, generated/index/partial expressions, DEFAULT spellings,

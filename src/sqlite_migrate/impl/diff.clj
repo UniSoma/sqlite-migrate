@@ -1,4 +1,4 @@
-(ns sqlite-migrate.diff
+(ns sqlite-migrate.impl.diff
   "The Equivalence relation and the full Diff model (ADR 0003, 0004).
 
   One fixed, knobless relation over Snapshots, normalizing at
@@ -21,7 +21,7 @@
   to at most one whole-value entry — fine-grained entries exist only
   inside a changed table (ADR 0004)."
   (:require [clojure.set :as set]
-    [sqlite-migrate.extract :as x]))
+    [sqlite-migrate.impl.extract :as x]))
 
 ;; ---------------------------------------------------------------------------
 ;; Token comparison

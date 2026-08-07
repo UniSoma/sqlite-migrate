@@ -7,9 +7,9 @@
   for everything that needs a rebuild (ADR 0006, 0007). Every effectful
   edge speaks to a `sqlite-migrate.protocols/SQLiteExecutor`."
   (:require [clojure.string :as str]
-    [sqlite-migrate.diff :as d]
-    [sqlite-migrate.extract :as x]
-    [sqlite-migrate.plan :as pl]
+    [sqlite-migrate.impl.diff :as d]
+    [sqlite-migrate.impl.extract :as x]
+    [sqlite-migrate.impl.plan :as pl]
     [sqlite-migrate.protocols :as p]))
 
 ;; ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@
   with stored CREATE sql embedded, and for :changed the `:facts` set —
   in a locked deterministic order, plain EDN all the way down. Empty
   `:entries` iff the Snapshots are Equivalent. See
-  `sqlite-migrate.diff/diff` for the full contract (ADR 0003, 0004)."
+  `sqlite-migrate.impl.diff/diff` for the full contract (ADR 0003, 0004)."
   [live declared]
   (d/diff live declared))
 
@@ -271,7 +271,7 @@
   `:capabilities` (defaults: the live Snapshot's SQLite version plus
   `:rebuild? true`) and `:live-snapshot`/`:declared-snapshot` (required
   planning context whenever the Diff contains a changed table). See
-  `sqlite-migrate.plan/plan` for the full contract (ADR 0006, 0007)."
+  `sqlite-migrate.impl.plan/plan` for the full contract (ADR 0006, 0007)."
   ([diff] (plan diff {}))
   ([diff opts] (pl/plan diff opts)))
 

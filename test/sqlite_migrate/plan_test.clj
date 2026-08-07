@@ -6,7 +6,7 @@
     [sqlite-migrate.core :as m]
     [sqlite-migrate.corpus :as corpus]
     [sqlite-migrate.jdbc :as sql-jdbc]
-    [sqlite-migrate.plan :as pl]
+    [sqlite-migrate.impl.plan :as pl]
     [sqlite-migrate.protocols :as p]
     [sqlite-migrate.test-util :refer [thrown-info]]))
 

@@ -25,6 +25,16 @@ id and the locked error-key root. The four ADR 0013 namespaces are:
 doesn't over-commit the namespace name to `SQLiteExecutor` being its only
 occupant forever.
 
+**Everything else lives under `sqlite-migrate.impl.*`** — today `impl.diff`,
+`impl.extract`, `impl.plan`, each one re-exported through `core`. The four
+public names above are the whole surface, so a namespace sitting beside them
+reads as public whatever its docstring says; the nesting is the signal that
+the file tree itself carries. It is a signal only — Clojure will not stop a
+consumer requiring an `impl` namespace, and nothing here promises to break
+if one does. Tests may require `impl` namespaces directly; `test/` is
+already unambiguously not-public. Any namespace added later is `impl.*`
+unless the public inventory in ADR 0013 grows to name it.
+
 **Versioning**: SemVer-shaped accretion. Development publishes run as
 `0.1.0-SNAPSHOT` (Clojars fixed releases are immutable, so SNAPSHOTs are the
 test channel); first fixed release `0.1.0`; iterate on 0.x while the
