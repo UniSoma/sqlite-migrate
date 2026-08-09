@@ -6,7 +6,8 @@
   compilation (SQL shape, determinism), Check's report, apply!'s
   default and opt-out, and the Gate bidirectionality property on real
   in-memory SQLite."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+    [clojure.test :refer [deftest is testing]]
     [sqlite-migrate.core :as m]
     [sqlite-migrate.jdbc :as sql-jdbc]
     [sqlite-migrate.protocols :as p]))
@@ -111,7 +112,12 @@
             (mapv (fn [op] [(:kind op) (mapv :code (:gates op))]) (:ops pl))))))
   (testing "a NOT NULL addition with a default carries no gate — every row takes the default"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
-                          ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL DEFAULT 'x')"]))))))
+                          ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL DEFAULT 'x')"])))))
+  (testing "an explicit DEFAULT NULL is no default — SQLite rejects the addition just the same"
+    (is (= [[:add-column [:empty-table]]]
+          (mapv (fn [[k g]] [k [(:code g)]])
+            (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
+                        ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL DEFAULT NULL)"])))))))
 
 ;; ---------------------------------------------------------------------------
 ;; UNIQUE constraint or unique index created — no duplicate key groups,
@@ -141,7 +147,31 @@
                 " WHERE (a > 0) AND \"a\" IS NOT NULL"
                 " GROUP BY \"a\" COLLATE BINARY"
                 " HAVING COUNT(*) > 1 LIMIT 10")]
-            (mapv (comp :sql second) (gates-of pl)))))))
+            (mapv (comp :sql second) (gates-of pl))))))
+  (testing "a new constant-defaulted key column samples its constant — every copied row takes it (ADR 0015)"
+    (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
+               ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x')"
+                "CREATE UNIQUE INDEX ux ON t (b)"])]
+      (is (= [[:create-index
+               {:code :unique
+                :path [:table "t" :index "ux"]
+                :explanation (str "unique index ux on table t; duplicate key groups"
+                               " would be rejected; new column b takes a constant"
+                               " default on every copied row")
+                :sql (str "SELECT ('x'), COUNT(*) AS \"sqm_count\" FROM \"t\""
+                       " WHERE ('x') IS NOT NULL"
+                       " GROUP BY ('x') COLLATE BINARY"
+                       " HAVING COUNT(*) > 1 LIMIT 10")
+                :limit 10}]]
+            (gates-of pl)))))
+  (testing "a new NULL-defaulted key column keeps every key distinct — no gate"
+    (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
+                          ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT NULL)"
+                           "CREATE UNIQUE INDEX ux ON t (b)"])))))
+  (testing "a new key column with an opaque expression default is undecidable at plan time — no gate (ADR 0015)"
+    (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
+                          ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT (hex(randomblob(4))))"
+                           "CREATE UNIQUE INDEX ux ON t (b)"]))))))
 
 (deftest unique-table-constraint-gates-on-the-rebuild
   (let [pl (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)"]
@@ -155,7 +185,16 @@
                      " GROUP BY \"a\", \"b\""
                      " HAVING COUNT(*) > 1 LIMIT 10")
               :limit 10}]]
-          (gates-of pl)))))
+          (gates-of pl))))
+  (testing "a part-new key gates the live subset with the new column's constant substituted (ADR 0015)"
+    (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
+               ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x', UNIQUE (a, b))"])]
+      (is (= [[:rebuild-table
+               (str "SELECT \"a\", ('x'), COUNT(*) AS \"sqm_count\" FROM \"t\""
+                 " WHERE \"a\" IS NOT NULL AND ('x') IS NOT NULL"
+                 " GROUP BY \"a\", ('x')"
+                 " HAVING COUNT(*) > 1 LIMIT 10")]]
+            (mapv (fn [[k g]] [k (:sql g)]) (gates-of pl)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; PK added/changed — no duplicates; NULLs gated only where SQLite
@@ -193,7 +232,24 @@
                  " WHERE \"a\" IS NOT NULL AND \"b\" IS NOT NULL"
                  " GROUP BY \"a\", \"b\" HAVING COUNT(*) > 1) LIMIT 10")]
               [:not-null "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT 10"]]
-            (mapv (comp (juxt :code :sql) second) (gates-of pl)))))))
+            (mapv (comp (juxt :code :sql) second) (gates-of pl))))))
+  (testing "a PK over a new constant-defaulted column gates on the row count — every copied row takes the constant (ADR 0015)"
+    (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
+               ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x', PRIMARY KEY (b))"])]
+      (is (= [[:rebuild-table
+               {:code :primary-key
+                :path [:table "t"]
+                :explanation (str "primary key (b) of table t; duplicate keys would be"
+                               " rejected; new column b takes a constant default on"
+                               " every copied row")
+                :sql (str "SELECT * FROM \"t\" WHERE ('x') IN"
+                       " (SELECT ('x') FROM \"t\" WHERE ('x') IS NOT NULL"
+                       " GROUP BY ('x') HAVING COUNT(*) > 1) LIMIT 10")
+                :limit 10}]]
+            (gates-of pl)))))
+  (testing "a new INTEGER PRIMARY KEY alias column carries no gate — the copy auto-assigns rowids"
+    (is (= [] (gates-of (plan-of ["CREATE TABLE t (b TEXT)"]
+                          ["CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)"]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; WITHOUT ROWID conversion — PK columns non-NULL
@@ -221,23 +277,26 @@
 ;; declared type (lossless numeric coercions allowed, as SQLite allows)
 
 (deftest strict-conversion-gates-on-stored-value-types
+  ;; the text arm's full grammar-decomposition SQL is asserted
+  ;; semantically, value by value, in
+  ;; strict-text-gate-matches-sqlite-acceptance below
   (let [pl (plan-of ["CREATE TABLE t (i INT)"]
-             ["CREATE TABLE t (i INT) STRICT"])]
-    (is (= [[:rebuild-table
-             {:code :strict
-              :path [:table "t"]
-              :explanation "table t converts to STRICT; every stored value must match its column's declared type"
-              :sql (str "SELECT * FROM \"t\" WHERE"
-                     " CASE typeof(\"i\")"
-                     " WHEN 'null' THEN 0 WHEN 'integer' THEN 0"
-                     " WHEN 'real' THEN \"i\" <> CAST(\"i\" AS INTEGER)"
-                     " WHEN 'text' THEN (CAST(\"i\" AS TEXT) NOT IN"
-                     " (CAST(CAST(\"i\" AS INTEGER) AS TEXT), CAST(CAST(\"i\" AS REAL) AS TEXT))"
-                     " OR CAST(\"i\" AS REAL) <> CAST(CAST(\"i\" AS REAL) AS INTEGER))"
-                     " ELSE 1 END"
-                     " LIMIT 10")
-              :limit 10}]]
-          (gates-of pl))))
+             ["CREATE TABLE t (i INT) STRICT"])
+        [[kind g]] (gates-of pl)]
+    (is (= 1 (count (gates-of pl))))
+    (is (= :rebuild-table kind))
+    (is (= {:code :strict
+            :path [:table "t"]
+            :explanation "table t converts to STRICT; every stored value must match its column's declared type"
+            :limit 10}
+          (dissoc g :sql)))
+    (testing "the non-text arms keep their storage-class checks; the text arm decomposes the literal grammar over the whitespace-trimmed value"
+      (is (str/starts-with? (:sql g)
+            (str "SELECT * FROM \"t\" WHERE CASE typeof(\"i\")"
+              " WHEN 'null' THEN 0 WHEN 'integer' THEN 0"
+              " WHEN 'real' THEN \"i\" <> CAST(\"i\" AS INTEGER)"
+              " WHEN 'text' THEN NOT ((CASE WHEN instr(upper(trim(\"i\", ' ' || char(9,10,11,12,13))), 'E') = 0")))
+      (is (str/ends-with? (:sql g) " ELSE 1 END LIMIT 10"))))
   (testing "an ANY column contributes no condition; an all-ANY table carries no gate"
     (let [pl (plan-of ["CREATE TABLE t (a BLOB)"]
                ["CREATE TABLE t (a ANY) STRICT"])]
@@ -261,6 +320,21 @@
                      " WHERE \"sqm_parent\".\"id\" = \"c\".\"pid\") LIMIT 10")
               :limit 10}]]
           (gates-of pl))))
+  (testing "an FK over a new constant-defaulted child column looks the constant up in the parent (ADR 0015)"
+    (let [shared "CREATE TABLE p (id INTEGER PRIMARY KEY)"
+          pl (plan-of [shared "CREATE TABLE c (x INTEGER)"]
+               [shared "CREATE TABLE c (x INTEGER, pid INTEGER DEFAULT 99 REFERENCES p(id))"])]
+      (is (= [[:rebuild-table
+               {:code :foreign-key
+                :path [:table "c" :foreign-key [:declared 0]]
+                :explanation (str "rows of table c referencing p must have a matching"
+                               " parent row; new column pid takes a constant default"
+                               " on every copied row")
+                :sql (str "SELECT * FROM \"c\" WHERE NOT EXISTS"
+                       " (SELECT 1 FROM \"p\" AS \"sqm_parent\""
+                       " WHERE \"sqm_parent\".\"id\" = (99)) LIMIT 10")
+                :limit 10}]]
+            (gates-of pl)))))
   (testing "a named FK whose action alone changes carries no gate — no row precondition"
     (let [shared "CREATE TABLE p (id INTEGER PRIMARY KEY)"
           pl (plan-of
@@ -400,6 +474,40 @@
         (is (not (contains? report :check)))))))
 
 ;; ---------------------------------------------------------------------------
+;; The STRICT text gate against the real acceptance rule (ADR 0015):
+;; for every spelling in the corpus, the compiled gate's verdict must
+;; equal what a real STRICT insert does
+
+(deftest strict-text-gate-matches-sqlite-acceptance
+  (let [corpus ["0123" "1e2" "1E2" "12." ".5" "+12" "-0" "1.e2" "00.5"
+                "1.5" "-1.5e-3" "1e+2"
+                " 12 " "\t12\n" "12\f" "\r12" "\u00a012"
+                "0x1A" "1_000" "Inf" "NaN" "" "  " "12abc" "1.2.3" "."
+                "+" "5e" "5e+" ".e2" "e5"
+                "9223372036854775807" "9223372036854775808"
+                "-9223372036854775808" "-9223372036854775809"
+                "9223372036854775806.0" "1e999" "-1e999"]]
+    (doseq [v corpus
+            ftype ["INT" "REAL"]]
+      (let [accepted? (with-open [conn (sql-jdbc/in-memory)]
+                        (p/execute-batch! conn
+                          [(str "CREATE TABLE t (v " ftype ") STRICT")])
+                        (try (p/execute-query conn
+                               "INSERT INTO t (v) VALUES (?) RETURNING 1" [v])
+                          true
+                          (catch Exception _ false)))
+            ;; the live column carries no affinity so the value stays text
+            gate-pass? (with-open [conn (sql-jdbc/in-memory)]
+                         (p/execute-batch! conn ["CREATE TABLE t (v)"])
+                         (p/execute-query conn
+                           "INSERT INTO t (v) VALUES (?) RETURNING 1" [v])
+                         (:pass? (m/check conn
+                                   (live-plan conn
+                                     [(str "CREATE TABLE t (v " ftype ") STRICT")]))))]
+        (is (= accepted? gate-pass?)
+          (str ftype " column, value " (pr-str v)))))))
+
+;; ---------------------------------------------------------------------------
 ;; Gate bidirectionality (ADR 0010), scoped to the inventoried codes:
 ;; Check pass => no data-dependent apply failure; Gate fail => apply
 ;; would abort. Gates are a predicate, not advice.
@@ -467,7 +575,42 @@
     :live ["CREATE TABLE t (a INTEGER)"]
     :declared ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"]
     :conforming []
-    :violating ["INSERT INTO t (a) VALUES (1)"]}])
+    :violating ["INSERT INTO t (a) VALUES (1)"]}
+   {:scenario "column added NOT NULL with an explicit DEFAULT NULL"
+    :live ["CREATE TABLE t (a INTEGER)"]
+    :declared ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL DEFAULT NULL)"]
+    :conforming []
+    :violating ["INSERT INTO t (a) VALUES (1)"]}
+   {:scenario "unique index over a new defaulted column"
+    :live ["CREATE TABLE t (a INTEGER)"]
+    :declared ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x')"
+               "CREATE UNIQUE INDEX ux ON t (b)"]
+    :conforming ["INSERT INTO t (a) VALUES (1)"]
+    :violating ["INSERT INTO t (a) VALUES (1), (2)"]}
+   {:scenario "UNIQUE table constraint over a part-new key through a rebuild"
+    :live ["CREATE TABLE t (a INTEGER)"]
+    :declared ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x', UNIQUE (a, b))"]
+    :conforming ["INSERT INTO t (a) VALUES (1), (2)"]
+    :violating ["INSERT INTO t (a) VALUES (1), (1)"]}
+   {:scenario "PK over a new defaulted column through a rebuild"
+    :live ["CREATE TABLE t (a INTEGER)"]
+    :declared ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT 'x', PRIMARY KEY (b))"]
+    :conforming ["INSERT INTO t (a) VALUES (1)"]
+    :violating ["INSERT INTO t (a) VALUES (1), (2)"]}
+   {:scenario "FK over a new defaulted column through a rebuild"
+    :live ["CREATE TABLE p (id INTEGER PRIMARY KEY)"
+           "CREATE TABLE c (x INTEGER)"]
+    :declared ["CREATE TABLE p (id INTEGER PRIMARY KEY)"
+               "CREATE TABLE c (x INTEGER, pid INTEGER DEFAULT 99 REFERENCES p(id))"]
+    :conforming ["INSERT INTO p (id) VALUES (99)"
+                 "INSERT INTO c (x) VALUES (1)"]
+    :violating ["INSERT INTO c (x) VALUES (1)"]}
+   {:scenario "STRICT conversion accepts non-canonical numeric text"
+    ;; the live columns carry no affinity so the inserted text stays text
+    :live ["CREATE TABLE t (i, r)"]
+    :declared ["CREATE TABLE t (i INT, r REAL) STRICT"]
+    :conforming ["INSERT INTO t (i, r) VALUES ('0123', '00.5'), (' 1e2 ', '1e999'), ('+12', '.5')"]
+    :violating ["INSERT INTO t (i, r) VALUES ('9223372036854775808', 1)"]}])
 
 (deftest gate-bidirectionality-property
   (doseq [{:keys [scenario live declared conforming violating]} bidirectionality-scenarios]
