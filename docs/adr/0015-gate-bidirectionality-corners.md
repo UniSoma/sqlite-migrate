@@ -33,7 +33,8 @@ spelling classified and substituted:
   exist.
 - **New INTEGER PRIMARY KEY alias**: no gate — the copy omits the
   column and SQLite auto-assigns fresh rowids, so the key cannot
-  collide.
+  collide. Measured: auto-assignment wins even when the column
+  declares a constant DEFAULT.
 - **Opaque expression default**: no gate — a **documented exclusion**
   from the bidirectionality property. The planner never understands
   expression text (ADR 0002), so what the copy will store is

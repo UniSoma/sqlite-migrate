@@ -556,6 +556,19 @@
         :null :null
         :opaque nil))))
 
+(defn- key-part-sql
+  "The bare SQL fragment of a `key-part` pair: the quoted live column,
+  or the constant fragment verbatim."
+  [[k v]]
+  (if (= :live k) (q-ident v) v))
+
+(defn- gateable-key-parts?
+  "Whether key parts support a gate at all: none opaque (nil), none
+  defaulting to NULL — those keys never collide nor dangle (ADR 0015)."
+  [key-parts]
+  (and (seq key-parts) (every? some? key-parts)
+    (not-any? #{:null} key-parts)))
+
 (defn- const-part-note
   "The explanation suffix naming the new key columns whose constant
   defaults a gate substitutes; nil when every part is live."
@@ -627,21 +640,19 @@
           (:unique? (:declared entry)))
     (let [t (:name (:live-table gctx))
           idx (:declared entry)
-          kps (mapv (fn [{:keys [name expr]}]
-                      (if name (key-part gctx name) [:expr (str "(" expr ")")]))
-                (:columns idx))]
-      ;; a NULL-defaulted new key column keeps every key distinct; an
-      ;; opaque default is undecidable at plan time (ADR 0015)
-      (when (and (every? some? kps) (not-any? #{:null} kps))
-        (let [parts (mapv (fn [{:keys [collate]} [k v]]
-                            (let [bare (if (= :live k) (q-ident v) v)]
+          key-parts (mapv (fn [{:keys [name expr]}]
+                            (if name (key-part gctx name) [:expr (str "(" expr ")")]))
+                      (:columns idx))]
+      (when (gateable-key-parts? key-parts)
+        (let [parts (mapv (fn [{:keys [collate]} kp]
+                            (let [bare (key-part-sql kp)]
                               {:select bare :bare bare
                                :group (cond-> bare collate (str " COLLATE " collate))}))
-                      (:columns idx) kps)]
+                      (:columns idx) key-parts)]
           [(gate :unique (:path entry)
              (str "unique index " (peek (:path entry)) " on table " t ";"
                " duplicate key groups would be rejected"
-               (const-part-note (mapv :name (:columns idx)) kps))
+               (const-part-note (mapv :name (:columns idx)) key-parts))
              (key-group-sql t parts (:where idx)))])))))
 
 (defn- foreign-key-gates [gctx entry]
@@ -654,7 +665,7 @@
     (let [{:keys [live-table live-snapshot declared-snapshot]} gctx
           t (:name live-table)
           fk (:declared entry)
-          kps (mapv #(key-part gctx %) (:columns fk))
+          key-parts (mapv #(key-part gctx %) (:columns fk))
           parent-fold (x/fold-name (:ref-table fk))
           find-parent (fn [snap]
                         (some (fn [[k v]] (when (= parent-fold (x/fold-name k)) v))
@@ -665,24 +676,23 @@
                      ;; an implicit REFERENCES targets the parent's PK
                      (or (get-in (find-parent declared-snapshot) [:primary-key :columns])
                        (get-in parent-live [:primary-key :columns])))]
-      ;; a NULL-defaulted new child column keeps the key un-enforced;
-      ;; an opaque default is undecidable at plan time (ADR 0015)
-      (when (and (seq kps) (every? some? kps) (not-any? #{:null} kps)
-              (= (count ref-cols) (count kps)))
+      ;; a NULL-defaulted new child column keeps the key un-enforced
+      (when (and (gateable-key-parts? key-parts)
+              (= (count ref-cols) (count key-parts)))
         (let [not-nulls (str/join " AND "
                           (keep (fn [[k v]] (when (= :live k)
                                               (str (q-ident v) " IS NOT NULL")))
-                            kps))
+                            key-parts))
               lookup (when parent-live
                        (str "NOT EXISTS (SELECT 1 FROM " (q-ident (:name parent-live))
                          " AS \"sqm_parent\" WHERE "
                          (str/join " AND "
-                           (map (fn [rc [k v]]
+                           (map (fn [rc [k :as kp]]
                                   (str "\"sqm_parent\"." (q-ident rc) " = "
                                     (if (= :live k)
-                                      (str (q-ident t) "." (q-ident v))
-                                      v)))
-                             ref-cols kps))
+                                      (str (q-ident t) "." (key-part-sql kp))
+                                      (key-part-sql kp))))
+                             ref-cols key-parts))
                          ")"))
               ;; a parent absent live means every full child key is an orphan
               condition (cond
@@ -693,7 +703,7 @@
           [(gate :foreign-key (:path entry)
              (str "rows of table " t " referencing " (:ref-table fk)
                " must have a matching parent row"
-               (const-part-note (:columns fk) kps))
+               (const-part-note (:columns fk) key-parts))
              (sampling-sql t condition))])))))
 
 (defn- sql-sign-stripped
@@ -702,7 +712,7 @@
   (str "CASE WHEN substr(" x ", 1, 1) IN ('+', '-') THEN substr(" x ", 2)"
     " ELSE " x " END"))
 
-(defn- sql-numeric-text?
+(defn- sql-numeric-text-condition
   "Predicate SQL: text expression `x` is a numeric literal SQLite's
   STRICT tables accept (measured on 3.53.2) — optional sign, digits
   with at most one decimal point and at least one digit, optional
@@ -721,7 +731,7 @@
       " ELSE (" (mantissa (str "substr(" x ", 1, " epos " - 1)"))
       ") AND (" exponent ") END")))
 
-(defn- sql-lossless-int64-text?
+(defn- sql-lossless-int64-condition
   "Predicate SQL: numeric text `x` converts to int64 losslessly, the
   way SQLite's STRICT INTEGER columns demand (measured on 3.53.2): a
   pure-digit spelling by textual boundary comparison against ±2^63 —
@@ -759,13 +769,13 @@
       (str "CASE typeof(" q ")"
         " WHEN 'null' THEN 0 WHEN 'integer' THEN 0"
         " WHEN 'real' THEN " q " <> CAST(" q " AS INTEGER)"
-        " WHEN 'text' THEN NOT ((" (sql-numeric-text? t) ")"
-        " AND (" (sql-lossless-int64-text? t) "))"
+        " WHEN 'text' THEN NOT ((" (sql-numeric-text-condition t) ")"
+        " AND (" (sql-lossless-int64-condition t) "))"
         " ELSE 1 END")
       "real"
       (str "CASE typeof(" q ")"
         " WHEN 'null' THEN 0 WHEN 'integer' THEN 0 WHEN 'real' THEN 0"
-        " WHEN 'text' THEN NOT (" (sql-numeric-text? t) ")"
+        " WHEN 'text' THEN NOT (" (sql-numeric-text-condition t) ")"
         " ELSE 1 END")
       "text" (str "typeof(" q ") = 'blob'")
       "blob" (str "typeof(" q ") NOT IN ('blob', 'null')")
@@ -786,21 +796,21 @@
       (vec
         (concat
           (when (and (contains? facts :primary-key) (seq pk-cols))
-            (let [kps (mapv #(key-part gctx %) pk-cols)]
+            (let [key-parts (mapv #(key-part gctx %) pk-cols)]
               ;; a new NULL-defaulted PK column never collides: a plain
               ;; rowid table stores the NULLs as distinct keys (legacy
               ;; quirk) and STRICT / WITHOUT ROWID shapes mark the
               ;; declared column NOT NULL, so the column-level gates
-              ;; guard those; a new alias column auto-assigns rowids;
-              ;; an opaque default is undecidable (ADR 0015)
-              (when (and (every? some? kps) (not-any? #{:null} kps)
-                      (not (and alias? (some #{:const} (map first kps)))))
-                (let [qs (mapv (fn [[k v]] (if (= :live k) (q-ident v) v)) kps)
+              ;; guard those; a new alias column auto-assigns fresh
+              ;; rowids even over a constant default (ADR 0015)
+              (when (and (gateable-key-parts? key-parts)
+                      (not (and alias? (some #{:const} (map first key-parts)))))
+                (let [qs (mapv key-part-sql key-parts)
                       key-list (str/join ", " qs)
                       row (if (= 1 (count qs)) (first qs) (str "(" key-list ")"))
                       live-qs (into [] (comp (filter (comp #{:live} first))
                                          (map (comp q-ident second)))
-                                kps)
+                                key-parts)
                       null-enforced? (and (not alias?) (seq live-qs)
                                        (or (:without-rowid? declared-table)
                                          (:strict? declared-table)))
@@ -810,7 +820,7 @@
                   [(gate :primary-key (:path entry)
                      (str "primary key (" (str/join ", " pk-cols) ") of table " t
                        "; duplicate keys would be rejected"
-                       (const-part-note pk-cols kps))
+                       (const-part-note pk-cols key-parts))
                      (sampling-sql t
                        (if null-enforced?
                          (str (str/join " OR " (map #(str % " IS NULL") live-qs)) " OR " dup)
@@ -851,18 +861,16 @@
   (when (contains? #{:added :changed} (:kind entry))
     (let [t (:name (:live-table gctx))
           cols (:columns (:declared entry))
-          kps (mapv #(key-part gctx %) cols)]
-      ;; a NULL-defaulted new key column keeps every key distinct; an
-      ;; opaque default is undecidable at plan time (ADR 0015)
-      (when (and (every? some? kps) (not-any? #{:null} kps))
+          key-parts (mapv #(key-part gctx %) cols)]
+      (when (gateable-key-parts? key-parts)
         [(gate :unique (:path entry)
            (str "unique key (" (str/join ", " cols) ") of table " t ";"
              " duplicate key groups would be rejected"
-             (const-part-note cols kps))
+             (const-part-note cols key-parts))
            (key-group-sql t
-             (mapv (fn [[k v]] (let [q (if (= :live k) (q-ident v) v)]
-                                 {:select q :bare q :group q}))
-               kps)
+             (mapv (fn [kp] (let [q (key-part-sql kp)]
+                              {:select q :bare q :group q}))
+               key-parts)
              nil))]))))
 
 (defn- entry-gates

@@ -1,12 +1,13 @@
 ---
 id: sqm-01kzeddfxdvf
 title: 'Gate bidirectionality corners: ungated new-column UNIQUE/FK failures and conservative STRICT text gate'
-status: in_progress
+status: closed
 type: bug
 priority: 2
 mode: afk
 created: '2026-08-07T15:28:09.130619162Z'
-updated: '2026-08-09T18:51:29.235121098Z'
+updated: '2026-08-09T18:57:05.650791629Z'
+closed: '2026-08-09T18:57:05.650791629Z'
 parent: sqm-01kzctnhwmjm
 tags:
 - phase-3
@@ -40,3 +41,7 @@ Corner A (direction 1): precise per-constraint gates for UNIQUE/PK/FK over new d
 Corner B (direction 2): replace the cast round-trip text arms with an exact grammar-decomposition predicate (trim/substr/instr/GLOB well-formedness + lossless-int64 tests), verified by a value-level oracle test against real STRICT inserts (corpus: '0123', '1e2', whitespace variants, '0x1A', '1_000', NBSP, int64 boundaries both spellings, '1e999'). Perf measured ~5-6x per-text-row CPU vs current, one-shot full scan already accepted by ADR 0008; canonical-round-trip short-circuit in reserve.
 
 Cross-cutting: example-based scenarios in gates_test.clj here (property harness demands a gate per scenario, so they start red); generative coverage stays with sqm-01kzcv5h4yna. One new ADR 'Gate bidirectionality corners' records the exclusion, the exact-predicate decision, and rejected alternatives (coarse empty-table gate, refusal+directive, documented deviation); ADR 0008/0010 untouched. No glossary changes.
+
+**2026-08-09T18:57:05.650791629Z**
+
+Both bidirectionality corners closed (ADR 0015, commits d467718 + c5e5e0b). Corner A: UNIQUE/PK/FK keys spanning new columns now gate over the live subset with constant DEFAULT spellings substituted verbatim (all-new key degenerates to failing iff >=2 rows); NULL defaults compile no gate (keys never collide/dangle; STRICT/WITHOUT ROWID PK columns are covered by the column-level gates since table_info marks them NOT NULL); a new INTEGER PK alias auto-assigns even over a constant DEFAULT (pinned by test); opaque expression defaults are the documented exclusion with the Frame as backstop. DEFAULT NULL now counts as no default for the :empty-table gate (adjacent hole, disclosed in the ADR). Corner B: the STRICT text branch replicates SQLite 3.53.2's acceptance exactly via trim/substr/instr/GLOB grammar decomposition plus lossless-int64, pinned by a 74-case value-level oracle test against real STRICT inserts. Six new bidirectionality scenarios, gate-shape unit tests, ADR 0015 records the exclusion and rejected alternatives.

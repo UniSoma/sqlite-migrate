@@ -249,7 +249,10 @@
             (gates-of pl)))))
   (testing "a new INTEGER PRIMARY KEY alias column carries no gate — the copy auto-assigns rowids"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (b TEXT)"]
-                          ["CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)"]))))))
+                          ["CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)"])))))
+  (testing "a new NULL-defaulted PK column on a plain rowid table carries no gate — SQLite stores the NULLs as distinct keys"
+    (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
+                          ["CREATE TABLE t (a INTEGER, b TEXT, PRIMARY KEY (b))"]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; WITHOUT ROWID conversion — PK columns non-NULL
@@ -472,6 +475,28 @@
       (let [report (m/apply! live (live-plan live ["CREATE TABLE t (a INTEGER, b BLOB NOT NULL)"])
                      {:check-gates? false})]
         (is (not (contains? report :check)))))))
+
+;; ---------------------------------------------------------------------------
+;; The no-gate decisions for new PK columns (ADR 0015) pinned to real
+;; SQLite behavior — the quirks the skips rely on must keep holding
+
+(deftest new-pk-column-no-gate-decisions-hold-on-real-sqlite
+  (testing "a plain rowid table stores NULL values of a new PK column as distinct keys"
+    (with-open [conn (sql-jdbc/in-memory)]
+      (p/execute-batch! conn ["CREATE TABLE t (a INTEGER)"
+                              "INSERT INTO t (a) VALUES (1), (2)"])
+      (let [pl (live-plan conn ["CREATE TABLE t (a INTEGER, b TEXT, PRIMARY KEY (b))"])]
+        (is (= [] (vec (mapcat :gates (:ops pl)))))
+        (is (map? (m/apply! conn pl))))))
+  (testing "an omitted INTEGER PRIMARY KEY alias column auto-assigns fresh rowids even over a constant DEFAULT"
+    (with-open [conn (sql-jdbc/in-memory)]
+      (p/execute-batch! conn ["CREATE TABLE t (a INTEGER)"
+                              "INSERT INTO t (a) VALUES (1), (2)"])
+      (let [pl (live-plan conn ["CREATE TABLE t (a INTEGER, b INTEGER DEFAULT 5, PRIMARY KEY (b))"])]
+        (is (= [] (vec (mapcat :gates (:ops pl)))))
+        (is (map? (m/apply! conn pl)))
+        (is (= [1 2] (mapv :b (p/execute-query conn "SELECT b FROM t ORDER BY b" [])))
+          "the DEFAULT did not win over rowid auto-assignment")))))
 
 ;; ---------------------------------------------------------------------------
 ;; The STRICT text gate against the real acceptance rule (ADR 0015):
