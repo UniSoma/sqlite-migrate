@@ -6,7 +6,7 @@ type: task
 priority: 2
 mode: afk
 created: '2026-08-07T00:49:59.554568924Z'
-updated: '2026-08-09T20:47:56.732943981Z'
+updated: '2026-08-09T22:18:22.327973428Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: bb release tasks work end to end; version sourced from build.clj; MIT license in place
@@ -14,7 +14,7 @@ acceptance:
 - title: README, recipes, and cljdoc articles published; protocol docstrings render as adapter reference
   done: false
 - title: 0.1.0-SNAPSHOT on Clojars, consumed successfully from a scratch project
-  done: false
+  done: true
 deps:
 - sqm-01kzcv5h1c5p
 - sqm-01kzcv5h4yna
@@ -36,3 +36,9 @@ Scope: build.clj as the version source of truth with real POM dependencies (next
 Packaging landed in 1e7c584. build.clj is the version source of truth (0.1.0-SNAPSHOT); bb jar/install/deploy/cljdoc tasks in place; POM verified to carry real deps (next.jdbc, sqlite-jdbc), MIT license, and commit-SHA SCM tag; LICENSE (MIT, UniSoma) at root and in the jar's META-INF. Docs: doc/cljdoc.edn article tree (design, recipes with CI drift check / converge-on-startup / stage-then-swap, native-image page), README gained installation, quickstart, documentation, releasing, and license sections. Verified locally: bb test 144/765 green, clj-kondo clean, bb install into ~/.m2, and a scratch consumer project ran the full pipeline against the installed artifact ("consumer ok").
 
 Remaining two ACs are blocked on things this environment doesn't have: no CLOJARS_USERNAME/CLOJARS_PASSWORD deploy token in env (bb deploy guards and refuses cleanly), and no GitHub remote exists yet (hard rule: local git only), which cljdoc needs to render the articles. Once a token is exported and the repo is pushed: bb deploy, verify the scratch consumer against Clojars (mv ~/.m2/repository/io/github/unisoma aside first), and bb cljdoc after the first fixed release (cljdoc skips SNAPSHOTs).
+
+**2026-08-09T22:18:22.327973428Z**
+
+Repo pushed to GitHub and 0.1.0-SNAPSHOT deployed to Clojars by Jonas. Verified consumption from Clojars proper: moved the locally-installed artifact out of ~/.m2, cleared the scratch consumer's classpath cache, and re-ran it — deps fetched sqlite-migrate-0.1.0-20260809.221256-1 from repo.clojars.org and the full pipeline printed "consumer ok". AC 3 done.
+
+AC 2 remains partially blocked by design: README, recipes, and articles are published on GitHub, but cljdoc does not build SNAPSHOT versions, so the article tree and the protocols docstring rendering can only be verified after the first fixed release (cut 0.1.0, tag v0.1.0, bb deploy, bb cljdoc).
