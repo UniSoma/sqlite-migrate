@@ -13,6 +13,7 @@
     [sqlite-migrate.impl.diff :as d]
     [sqlite-migrate.impl.extract :as x]
     [sqlite-migrate.impl.plan :as pl]
+    [sqlite-migrate.impl.report :as r]
     [sqlite-migrate.protocols :as p]))
 
 ;; ---------------------------------------------------------------------------
@@ -262,6 +263,29 @@
   [diff]
   (boolean (seq (:entries diff))))
 
+(defn drift-report
+  "Render `diff` into a deterministic plain-text drift report: one
+  block per entry in the locked entry order — per-fact both-sides
+  lines for a :changed entry, the object's whole verbatim CREATE sql
+  for an :added/:removed one. Pure and single-arity; renders from a
+  deserialized Diff alone; an empty Diff yields the empty string.
+  Presentation-only — the text is not a parse contract, the EDN Diff
+  is the machine surface. See `sqlite-migrate.impl.report/drift-report`
+  for the full contract (ADR 0005)."
+  [diff]
+  (r/drift-report diff))
+
+(defn by-object
+  "Regroup `diff`'s flat entries under the object each belongs to: a
+  vector of `{:path [<kind> <name>] :entries [...]}` groups in the
+  locked entry order, a changed table's table-level entry reunited
+  with its fine-grained children, entries verbatim and in order. The
+  one nesting view — an empty Diff yields `[]`. See
+  `sqlite-migrate.impl.report/by-object` for the full contract
+  (ADR 0005)."
+  [diff]
+  (r/by-object diff))
+
 ;; ---------------------------------------------------------------------------
 ;; Plan
 
@@ -284,6 +308,20 @@
   0007, 0009)."
   ([diff] (plan diff {}))
   ([diff opts] (pl/plan diff opts)))
+
+(defn plan-report
+  "Render `plan` into a deterministic plain-text plan report — the
+  pre-apply review artifact: a header with both sides' identity, the
+  Ops in execution order with kind, object path, Gates (code and
+  explanation), and full SQL always; then the unhandled entries with
+  each Refusal's class, code, and explanation; then the unused
+  Directives verbatim. Pure and single-arity; renders from a
+  deserialized Plan alone. Presentation-only — the text is not a
+  parse contract, the EDN Plan is the machine surface. See
+  `sqlite-migrate.impl.report/plan-report` for the full contract
+  (ADR 0012)."
+  [plan]
+  (r/plan-report plan))
 
 ;; ---------------------------------------------------------------------------
 ;; Check (ADR 0008)
@@ -342,6 +380,19 @@
   [conn plan]
   (verify-fingerprint! conn plan)
   (run-gates conn plan))
+
+(defn check-report
+  "Render a Check result into a deterministic plain-text check report:
+  a one-line verdict, then one block per failing Gate — code, path, op
+  index, explanation, violation count (\"limit or more\" when the
+  sample hit the Gate's baked limit), and the sample rows verbatim.
+  Pure and single-arity; renders from a deserialized Check result
+  alone. Presentation-only — the text is not a parse contract, the
+  EDN Check result is the machine surface. See
+  `sqlite-migrate.impl.report/check-report` for the full contract
+  (ADR 0012)."
+  [check-result]
+  (r/check-report check-result))
 
 ;; ---------------------------------------------------------------------------
 ;; Apply

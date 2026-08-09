@@ -17,8 +17,11 @@ spelling classified and substituted:
   CHECK-gate precedent for text the planner never evaluates. Every
   copied row shares the constant, so an all-new key degenerates to
   grouping by a constant, which fails exactly when two or more rows
-  exist. The parens keep a bare integer literal from reading as a
-  positional GROUP BY reference. The new-column cause is named in the
+  exist. Integer-literal constants stay out of the GROUP BY list
+  entirely — SQLite constant-folds them into positional references even
+  parenthesized or signed (measured on 3.53) — which changes nothing:
+  a constant is one group either way, and an all-constant key groups by
+  NULL. The new-column cause is named in the
   gate's `:explanation`; the gate codes stay `:unique`,
   `:primary-key`, `:foreign-key` (open set, ADR 0008).
 - **NULL default** (none given, or the NULL keyword): no gate. SQLite

@@ -562,6 +562,32 @@
   [[k v]]
   (if (= :live k) (q-ident v) v))
 
+(defn- positional-group-const?
+  "True when a :const key part's fragment is an integer literal —
+  SQLite constant-folds those into positional GROUP BY references even
+  parenthesized or signed (measured on 3.53), so they must stay out of
+  GROUP BY. Grouping semantics are unchanged: a constant is one group
+  either way (ADR 0015)."
+  [[k v]]
+  (and (= :const k)
+    (some? (re-matches #"(?i)\(\s*[+-]?(?:\d+|0x[0-9A-F]+)\s*\)" v))))
+
+(defn- key-part-fragments
+  "The `{:select :bare :group}` SQL fragments of one key part —
+  `:group` nil for integer-literal constants, which must stay out of
+  GROUP BY (`positional-group-const?`)."
+  [kp]
+  (let [q (key-part-sql kp)]
+    {:select q :bare q :group (when-not (positional-group-const? kp) q)}))
+
+(defn- group-by-list
+  "The GROUP BY list over the non-nil `:group` fragments of `parts`;
+  \"NULL\" when every part must stay out — one group of every row,
+  matching an all-constant key's semantics (ADR 0015)."
+  [parts]
+  (let [gs (keep :group parts)]
+    (if (seq gs) (str/join ", " gs) "NULL")))
+
 (defn- gateable-key-parts?
   "Whether key parts support a gate at all: none opaque (nil), none
   defaulting to NULL — those keys never collide nor dangle (ADR 0015)."
@@ -583,14 +609,16 @@
   "The duplicate-key-group sampling SELECT: one row per violating key
   group with its COUNT, keys containing NULL excluded — SQLite
   uniqueness treats them as always distinct. `parts` are `{:select
-  :bare :group}` SQL fragments per key part; `where` is a partial
-  index's verbatim predicate."
+  :bare :group}` SQL fragments per key part — `:group` nil for parts
+  that must stay out of GROUP BY (integer-literal constants read as
+  positional there); an all-nil key groups by NULL, one group of every
+  row. `where` is a partial index's verbatim predicate."
   [live-tname parts where]
   (str "SELECT " (str/join ", " (map :select parts)) ", COUNT(*) AS \"sqm_count\""
     " FROM " (q-ident live-tname)
     " WHERE " (when where (str "(" where ") AND "))
     (str/join " AND " (map #(str (:bare %) " IS NOT NULL") parts))
-    " GROUP BY " (str/join ", " (map :group parts))
+    " GROUP BY " (group-by-list parts)
     " HAVING COUNT(*) > 1 LIMIT " gate-sample-limit))
 
 (defn- column-gates [gctx entry]
@@ -645,9 +673,10 @@
                       (:columns idx))]
       (when (gateable-key-parts? key-parts)
         (let [parts (mapv (fn [{:keys [collate]} kp]
-                            (let [bare (key-part-sql kp)]
-                              {:select bare :bare bare
-                               :group (cond-> bare collate (str " COLLATE " collate))}))
+                            (let [f (key-part-fragments kp)]
+                              (cond-> f
+                                (and collate (:group f))
+                                (update :group str " COLLATE " collate))))
                       (:columns idx) key-parts)]
           [(gate :unique (:path entry)
              (str "unique index " (peek (:path entry)) " on table " t ";"
@@ -814,9 +843,10 @@
                       null-enforced? (and (not alias?) (seq live-qs)
                                        (or (:without-rowid? declared-table)
                                          (:strict? declared-table)))
+                      group-list (group-by-list (map key-part-fragments key-parts))
                       dup (str row " IN (SELECT " key-list " FROM " (q-ident t)
                             " WHERE " (str/join " AND " (map #(str % " IS NOT NULL") qs))
-                            " GROUP BY " key-list " HAVING COUNT(*) > 1)")]
+                            " GROUP BY " group-list " HAVING COUNT(*) > 1)")]
                   [(gate :primary-key (:path entry)
                      (str "primary key (" (str/join ", " pk-cols) ") of table " t
                        "; duplicate keys would be rejected"
@@ -867,11 +897,7 @@
            (str "unique key (" (str/join ", " cols) ") of table " t ";"
              " duplicate key groups would be rejected"
              (const-part-note cols key-parts))
-           (key-group-sql t
-             (mapv (fn [kp] (let [q (key-part-sql kp)]
-                              {:select q :bare q :group q}))
-               key-parts)
-             nil))]))))
+           (key-group-sql t (mapv key-part-fragments key-parts) nil))]))))
 
 (defn- entry-gates
   "The Gates one routed unit's entry contributes, compiled from the

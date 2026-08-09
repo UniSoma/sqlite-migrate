@@ -1,0 +1,102 @@
+# CI version matrix (ADR 0010) plus the Graal native-image smoke job (ADR 0014).
+#
+# Two sqlite-jdbc points:
+#   - floor 3.40.1.0 (the oldest conveniently pinnable; upstream native-image
+#     testing begins there) runs the generative property suite — version
+#     honesty included — via the :sqlite-floor override alias. The floor
+#     bundles SQLite 3.40.1, below the 3.53 in-place ALTER-constraint gate,
+#     so the deterministic unit tests that pin latest-version plan shapes
+#     are out of scope on this leg by design.
+#   - latest (the deps.edn pin) runs the full suite.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - point: sqlite-jdbc-floor-3.40.1.0
+            test-cmd: >-
+              clojure -X:test:sqlite-floor
+              :nses '[sqlite-migrate.properties-test]'
+          - point: sqlite-jdbc-latest
+            test-cmd: clojure -X:test
+    name: test (${{ matrix.point }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+          clj-kondo: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ matrix.point }}-${{ hashFiles('deps.edn') }}
+          restore-keys: deps-${{ matrix.point }}-
+
+      - name: Lint
+        run: clj-kondo --lint src test
+
+      - name: Test
+        run: ${{ matrix.test-cmd }}
+        env:
+          SQM_TRIALS: '100'
+
+  native-image-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm-community
+          java-version: '21'
+
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-smoke-${{ hashFiles('deps.edn') }}
+          restore-keys: deps-smoke-
+
+      - name: AOT-compile the smoke program
+        run: |
+          mkdir -p classes
+          clojure -M:smoke -e "(compile 'smoke)"
+
+      - name: Build the native image
+        run: >-
+          native-image
+          -cp "$(clojure -Spath -A:smoke)"
+          --no-fallback
+          --initialize-at-build-time
+          -H:+ReportExceptionStackTraces
+          -o smoke-bin
+          smoke
+
+      - name: Run the smoke binary
+        run: |
+          out="$(./smoke-bin)"
+          echo "$out"
+          test "$out" = ok

@@ -11,10 +11,20 @@
   :test
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.clojure/test.check {:mvn/version "1.1.1"}}
    :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
    :main-opts ["-m" "cognitect.test-runner"]
    :exec-fn cognitect.test-runner.api/test}
+
+  ;; ADR 0010: CI version-matrix floor — oldest sqlite-jdbc conveniently
+  ;; pinnable; 3.40.1.0 is where upstream native-image testing begins (ADR 0014).
+  :sqlite-floor
+  {:override-deps {org.xerial/sqlite-jdbc {:mvn/version "3.40.1.0"}}}
+
+  ;; Native-image smoke program (ci/smoke/smoke.clj); "classes" holds its AOT output.
+  :smoke
+  {:extra-paths ["ci/smoke" "classes"]}
 
   :nrepl
   {:extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
