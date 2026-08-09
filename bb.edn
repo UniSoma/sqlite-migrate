@@ -1,5 +1,34 @@
 {:tasks
- {test
+ {;; Release tasks (ADR 0014). The version lives in build.clj alone;
+  ;; the cljdoc task asks build.clj for it rather than duplicating it.
+  jar
+  {:doc "Build the library jar (clojure -T:build jar)."
+   :task (shell "clojure" "-T:build" "jar")}
+
+  install
+  {:doc "Build and install into ~/.m2 for consumer verification (clojure -T:build install)."
+   :task (shell "clojure" "-T:build" "install")}
+
+  deploy
+  {:doc "Build and deploy to Clojars (clojure -T:build deploy). Needs CLOJARS_USERNAME/CLOJARS_PASSWORD."
+   :task (do (doseq [v ["CLOJARS_USERNAME" "CLOJARS_PASSWORD"]]
+               (when (empty? (System/getenv v))
+                 (throw (ex-info (str "deploy: " v " is not set — export a Clojars deploy token first") {}))))
+           (shell "clojure" "-T:build" "deploy"))}
+
+  cljdoc
+  {:doc "Trigger the cljdoc build for the version in build.clj (fixed releases only — cljdoc skips SNAPSHOTs)."
+   :requires ([babashka.process :as p]
+              [clojure.string :as str])
+   :task (let [version (str/trim (:out (p/sh ["clojure" "-T:build" "print-version"])))]
+           (when (str/ends-with? version "-SNAPSHOT")
+             (throw (ex-info (str "cljdoc does not build SNAPSHOT versions (" version ")") {})))
+           (shell "curl" "--fail-with-body" "-X" "POST"
+             "https://cljdoc.org/api/request-build2"
+             "-d" "project=io.github.unisoma/sqlite-migrate"
+             "-d" (str "version=" version)))}
+
+  test
   {:doc "Run the test suite via cognitect test-runner (clojure -X:test)."
    :task (shell "clojure" "-X:test")}
 
@@ -9,11 +38,11 @@
               [clojure.string :as str])
    :task (let [listening? (fn [port]
                             (try (.close (java.net.Socket. "127.0.0.1" (int port))) true
-                                 (catch java.io.IOException _ false)))
+                              (catch java.io.IOException _ false)))
                daemon     (fn [port cmd]
                             (if (listening? port)
                               (println (str "pre_start: :" port " already listening — skip"))
                               (do (println (str "pre_start: starting " (str/join " " cmd)))
-                                  (p/process cmd {:out :inherit :err :inherit}))))]
+                                (p/process cmd {:out :inherit :err :inherit}))))]
            (daemon 7888 ["clojure" "-M:test:nrepl"]))}}}
 
