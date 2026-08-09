@@ -2,20 +2,12 @@
 
 Declarative SQLite schema migration for Clojure: introspect a live database into a
 Snapshot, diff it against a Declaration, and turn the Diff into an executable Plan.
-Every stage is a plain data value.
-
-The Diff is a product surface of its own. Exactly three pure functions operate on it —
-`drift?`, `drift-report`, and `by-object` — and the two recipes below are documented
-patterns, not API (ADR 0005).
 
 ## Installation
 
 ```clojure
 io.github.unisoma/sqlite-migrate {:mvn/version "0.1.0-SNAPSHOT"}
 ```
-
-One artifact, JDBC batteries included (next.jdbc, sqlite-jdbc) — add the
-coordinate and go.
 
 ## Quickstart
 
@@ -38,15 +30,15 @@ coordinate and go.
         (m/apply! live plan)))))       ; one transaction, all-or-nothing
 ```
 
-Renames and destructive drops are refused until you pass explicit
-`:directives` to `plan`; data preconditions (a new NOT NULL over existing
-rows) surface as Gates you can probe read-only with `m/check`. Prefer
-building schemas as data? `sqlite-migrate.schema/->sql` compiles an EDN
-Schema value into the same Declaration statement vector.
+`plan` refuses renames and destructive drops until you pass explicit
+`:directives`; data preconditions (a new NOT NULL over existing
+rows) surface as Gates you probe read-only with `m/check`. To build
+schemas as data, `sqlite-migrate.schema/->sql` compiles an EDN Schema
+value into the same Declaration statement vector.
 
-## The Diff in one paragraph
+## The Diff
 
-`sqlite-migrate.core/diff` compares two Snapshots into `{:entries [...] :live-metadata
+`sqlite-migrate.core/diff` compares two Snapshots and returns `{:entries [...] :live-metadata
 ... :declared-metadata ...}`. Each entry is one self-contained Semantic difference:
 `:kind` (`:added`, `:removed`, `:changed`), `:path` addressing the object, both sides'
 verbatim sub-values under `:live`/`:declared` (stored CREATE sql included), and for
@@ -102,53 +94,26 @@ emptiness guarantee applies only to unfiltered diffs.
 
 ## The three Diff surfaces
 
-- `drift?` — true when the Diff has entries, i.e. the live schema is not Equivalent to
+- `drift?`: true when the Diff has entries, i.e. the live schema is not Equivalent to
   the declared one.
-- `drift-report` — single-arity, deterministic Diff-to-string renderer. Changed objects
+- `drift-report`: single-arity, deterministic Diff-to-string renderer. Changed objects
   print one line per differing fact with both sides' values; added and removed objects
   print their whole verbatim CREATE sql. Renders from a deserialized Diff alone.
-- `by-object` — the one nesting view: flat entries regrouped as `{:path [<kind> <name>]
+- `by-object`: the one nesting view. Flat entries are regrouped as `{:path [<kind> <name>]
   :entries [...]}` per object, a changed table's table-level entry reunited with its
   fine-grained column, constraint, index, and trigger children.
 
-## CI
-
-`.github/workflows/ci.yml` runs a two-point sqlite-jdbc version matrix (ADR 0010)
-plus a GraalVM native-image smoke job (ADR 0014):
-
-- **Floor — sqlite-jdbc 3.40.1.0**: the oldest version conveniently pinnable, and
-  the release where upstream native-image testing begins. The `:sqlite-floor`
-  deps alias overrides the pin, so `clojure -X:test:sqlite-floor` runs against it.
-  This leg runs the generative property suite (`sqlite-migrate.properties-test`),
-  version honesty included. The floor bundles SQLite 3.40.1 — below the 3.53
-  in-place ALTER-constraint gate — so the deterministic unit tests that pin
-  latest-version plan shapes are out of scope on this leg by design.
-- **Latest — the deps.edn pin**: the full suite plus `clj-kondo` lint.
-- **Native-image smoke**: AOT-compiles `ci/smoke/smoke.clj` (snapshot → declare →
-  diff → plan → apply against a real in-memory database), builds it with
-  `native-image`, and requires the binary to print `ok`.
-
 ## Documentation
 
-- [Design](doc/design.md) — the pipeline and the decisions behind it.
-- [Recipes](doc/recipes.md) — CI drift check, converge on startup, stage
+- [Design](doc/design.md): the pipeline and the decisions behind it.
+- [Recipes](doc/recipes.md): CI drift check, converge on startup, stage
   then swap.
-- [Native image](doc/native-image.md) — compiling the library into a
+- [Native image](doc/native-image.md): compiling the library into a
   GraalVM binary.
-- API reference on [cljdoc](https://cljdoc.org/d/io.github.unisoma/sqlite-migrate) —
+- API reference on [cljdoc](https://cljdoc.org/d/io.github.unisoma/sqlite-migrate):
   the `sqlite-migrate.protocols` docstrings are the normative adapter-author
   contract.
-- `docs/adr/` — the ADRs are the normative design record; `CONTEXT.md` is
-  the domain glossary.
-
-## Releasing
-
-The version lives in `build.clj` alone. `bb jar` builds the artifact,
-`bb install` installs it into `~/.m2` for consumer verification, `bb deploy`
-publishes to Clojars (deploy token in `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`),
-and `bb cljdoc` triggers the cljdoc build for a fixed release. SNAPSHOTs are
-the test channel; fixed releases get an immutable `v<version>` git tag.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 UniSoma.
+MIT (see [LICENSE](LICENSE)). Copyright (c) 2026 UniSoma.
