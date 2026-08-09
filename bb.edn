@@ -17,12 +17,10 @@
            (shell "clojure" "-T:build" "deploy"))}
 
   cljdoc
-  {:doc "Trigger the cljdoc build for the version in build.clj (fixed releases only — cljdoc skips SNAPSHOTs)."
+  {:doc "Trigger the cljdoc build for the version in build.clj."
    :requires ([babashka.process :as p]
               [clojure.string :as str])
    :task (let [version (str/trim (:out (p/sh ["clojure" "-T:build" "print-version"])))]
-           (when (str/ends-with? version "-SNAPSHOT")
-             (throw (ex-info (str "cljdoc does not build SNAPSHOT versions (" version ")") {})))
            (shell "curl" "--fail-with-body" "-X" "POST"
              "https://cljdoc.org/api/request-build2"
              "-d" "project=io.github.unisoma/sqlite-migrate"
