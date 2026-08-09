@@ -1,4 +1,4 @@
-(ns sqlite-migrate.impl.report
+(ns ^:no-doc sqlite-migrate.impl.report
   "Presentation-only surfaces over the pipeline's values: `drift-report`
   and `by-object` over the Diff (ADR 0005), `plan-report` over the Plan
   and `check-report` over the Check result (ADR 0012). All pure,

@@ -1,4 +1,4 @@
-(ns sqlite-migrate.impl.diff
+(ns ^:no-doc sqlite-migrate.impl.diff
   "The Equivalence relation and the full Diff model (ADR 0003, 0004).
 
   One fixed, knobless relation over Snapshots, normalizing at

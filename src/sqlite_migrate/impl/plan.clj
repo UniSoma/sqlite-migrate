@@ -1,4 +1,4 @@
-(ns sqlite-migrate.impl.plan
+(ns ^:no-doc sqlite-migrate.impl.plan
   "The pure planner (ADR 0006, 0007): Diff entries in, an ordered,
   self-contained Plan out — every entry either served by ops or honestly
   unhandled with its full Refusal vector. Never throws for refusals;
