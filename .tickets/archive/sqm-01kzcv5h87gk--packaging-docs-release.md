@@ -1,18 +1,19 @@
 ---
 id: sqm-01kzcv5h87gk
 title: Packaging, docs, release
-status: in_progress
+status: closed
 type: task
 priority: 2
 mode: afk
 created: '2026-08-07T00:49:59.554568924Z'
-updated: '2026-08-09T22:44:52.951206001Z'
+updated: '2026-08-09T22:50:19.896997770Z'
+closed: '2026-08-09T22:50:19.896997770Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: bb release tasks work end to end; version sourced from build.clj; MIT license in place
   done: true
 - title: README, recipes, and cljdoc articles published; protocol docstrings render as adapter reference
-  done: false
+  done: true
 - title: 0.1.0-SNAPSHOT on Clojars, consumed successfully from a scratch project
   done: true
 deps:
@@ -46,3 +47,7 @@ AC 2 remains partially blocked by design: README, recipes, and articles are publ
 **2026-08-09T22:44:52.951206001Z**
 
 cljdoc is already live (Jonas triggered the build manually — it does handle SNAPSHOTs when asked). Feedback applied: all four sqlite-migrate.impl.* namespaces now carry ^:no-doc so cljdoc hides them and only core/protocols/jdbc/schema render. Lint + full suite green. Needs a redeploy (bb deploy) and a cljdoc rebuild to take effect on the site.
+
+**2026-08-09T22:50:19.896997770Z**
+
+Shipped in 1e7c584..068e162. build.clj is the version source of truth with real POM deps (next.jdbc, sqlite-jdbc), MIT license, and SCM metadata (commit SHA for SNAPSHOTs, v-tags for fixed releases); bb tasks jar/install/deploy/cljdoc; MIT LICENSE at root and in the jar. Docs: README pitch/quickstart/drift-check recipe, doc/ article tree (design, recipes incl. converge-on-startup and stage-then-swap, native-image page), cljdoc live with impl.* namespaces hidden via :no-doc. 0.1.0-SNAPSHOT deployed to Clojars and consumed from a scratch project resolving against repo.clojars.org.
