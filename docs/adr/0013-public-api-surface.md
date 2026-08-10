@@ -1,6 +1,8 @@
 # Public API surface: four namespaces, a two-op executor protocol, conn-symmetric edges
 
 > Amended by ADR 0016: `execute-batch!` gains a `gate-sqls` arity and the Frame a gate step.
+>
+> Amended by ADR 0017: `plan` takes both Snapshots positionally, ahead of the Diff.
 
 The public surface is **four namespaces** (concrete names deferred to
 packaging): a **core** namespace holding the entire pipeline, a **protocol**
@@ -49,16 +51,18 @@ produce a silently polluted declared Snapshot.
 | `diff` | `[live declared]` | Diff |
 | `drift?` | `[diff]` | boolean |
 | `by-object` | `[diff]` | nested per-object view |
-| `plan` | `[diff]` `[diff opts]` | Plan |
+| `plan` | `[live declared diff]` `[live declared diff opts]` | Plan |
 | `check` | `[conn plan]` | Check result |
 | `apply!` | `[conn plan]` `[conn plan opts]` | Apply report |
 | `drift-report` | `[diff]` | string |
 | `plan-report` | `[plan]` | string |
 | `check-report` | `[check-result]` | string |
 
-`plan` opts are `{:capabilities ... :directives [...]}`, both optional.
-**Omitted capabilities default to the live side's Snapshot-metadata SQLite
-version** plus `:rebuild? true` — the zero-config path is version-honest by
+`plan` takes the two Snapshots the Diff was computed from as positional
+arguments (ADR 0017) — they are required planning context, not options — and
+its opts are `{:capabilities ... :directives [...]}`, both optional.
+**Omitted capabilities default to the live Snapshot's SQLite version** plus
+`:rebuild? true` — the zero-config path is version-honest by
 construction (the Plan targets the engine that actually read the file),
 where a baked-in "latest known" constant could silently exceed the deployed
 engine. `apply!` opts are exactly `{:allow-unhandled? :check-gates?}`
@@ -93,7 +97,7 @@ SQL statement strings, i.e. a Declaration) — core never sees Schema values
 
 - Adapter authors implement two ops plus constructors; the frame contract
   lives in — and is normative from — the protocol namespace docstrings.
-- `plan` must read the live Snapshot metadata embedded in the Diff for its
-  capabilities default.
+- `plan` reads its capabilities default from the live Snapshot it is given
+  (ADR 0017), and checks that Snapshot's provenance against the Diff's.
 - Concrete namespace names and artifact coordinates are settled by the
   packaging decision, not here.

@@ -1,8 +1,11 @@
 # The Plan is an ordered, self-contained, capability-aware EDN value
 
-A Plan is a thin wrapper map produced by the pure function `plan(diff, opts)` —
-whose information basis is the Diff's entries as work items plus both Snapshots
-for context (the Diff wrapper already embeds both sides' metadata). The wrapper
+> Amended by ADR 0017: `plan` takes both Snapshots positionally, ahead of the Diff.
+
+A Plan is a thin wrapper map produced by the pure function
+`plan(live, declared, diff, opts)` — whose information basis is the Diff's
+entries as work items plus the two Snapshots it was computed from, passed as
+arguments because the Diff embeds only their provenance. The wrapper
 holds exactly three things: an ordered `:ops` vector, both sides' Snapshot
 metadata (so a Plan states what live state it was computed against), and the
 capabilities it was planned for. Capabilities (target SQLite version, defaulting

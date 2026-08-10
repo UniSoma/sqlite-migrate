@@ -31,6 +31,10 @@ executable.
 - **Minimal entries that reference the Snapshots** — rejected: the diff is a
   first-class surface that must travel alone (a serialized CI artifact renders
   without either Snapshot). Entries embed both sides' verbatim sub-values.
+  Travelling alone means the **drift surfaces** — `drift?`, `by-object`,
+  `drift-report` — render from a deserialized Diff and nothing else; it was
+  never a claim that a Diff off a wire suffices to plan against, and ADR 0017
+  makes that scope explicit by handing `plan` both Snapshots.
 - **A `renamed` change kind** — rejected: rename intent is explicit user data
   (directives layer), never inferred; a Diff derives from two intent-free
   Snapshots, so a rename is honestly a removed/added pair until a directive

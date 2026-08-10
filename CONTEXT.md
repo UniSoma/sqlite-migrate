@@ -66,7 +66,7 @@ string and blob literals byte-exact. Lexical only; never a parser.
 
 **Diff**:
 The first-class data value produced by comparing two Snapshots (live, declared): a thin
-wrapper map holding a flat sequence of Diff entries plus both sides' Snapshot metadata.
+wrapper map holding a flat sequence of Diff entries plus both sides' Snapshot provenance.
 Empty entries ⇔ the Snapshots are Equivalent. A pure state delta: no migration intent,
 no cost labels, no derived dependency data.
 _Avoid_: changeset, delta report, drift report (a drift report is a rendering of a Diff)
@@ -79,10 +79,18 @@ of differing facts. Carries no rename concept — a rename is a removed/added pa
 the directives layer says otherwise.
 _Avoid_: hunk, change record
 
-**Snapshot metadata**:
-Provenance attached to a Snapshot without affecting its equality: the SQLite version that
-read it, the file's `schema_version` fingerprint, and each object's stored CREATE sql.
+**Snapshot provenance**:
+Where a Snapshot came from, attached to it without affecting its equality: the SQLite
+version that read it and the source database's `schema_version` fingerprint. Travels
+with the Diff and the Plan as both sides' identity. The fingerprint is a mutation
+counter, not a content hash — unequal proves staleness, equal does not prove identity.
 Two Snapshots of identical schemas compare equal regardless of provenance.
+_Avoid_: Snapshot metadata
+
+**Stored CREATE sql**:
+The verbatim CREATE statement SQLite has stored for one object, attached to that
+object's Snapshot value without affecting its equality, and carried inside a Diff
+entry's both-sides sub-values.
 
 **Drift**:
 A non-empty Diff between a live file and a Declaration — the live schema is not
@@ -90,9 +98,10 @@ Equivalent to the declared one.
 _Avoid_: schema mismatch, divergence
 
 **Plan**:
-The ordered, executable data value produced by planning a Diff under given
-capabilities and directives: a thin wrapper holding an ordered sequence of Ops,
-both sides' Snapshot metadata, the capabilities and directives planned under
+The ordered, executable data value produced by planning a Diff against the two
+Snapshots it was computed from, under given capabilities and directives: a thin
+wrapper holding an ordered sequence of Ops,
+both sides' Snapshot provenance, the capabilities and directives planned under
 (with unused directives called out), and the unhandled Diff entries.
 List position is execution order. Pure EDN; nothing connection-bound.
 _Avoid_: migration, changeset, script
@@ -120,7 +129,7 @@ _Avoid_: run, execute, migrate
 
 **Apply report**:
 The plain-EDN value a successful Apply returns: the Plan's identity (both
-sides' Snapshot metadata), the Check result from the pre-check (absent when
+sides' Snapshot provenance), the Check result from the pre-check (absent when
 skipped), the Ops executed, and the post-apply `schema_version` fingerprint.
 Carries no timestamps or durations.
 _Avoid_: result, receipt, log
