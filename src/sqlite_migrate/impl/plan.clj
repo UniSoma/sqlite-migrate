@@ -993,7 +993,10 @@
   Snapshot `plan` was given. Past `plan`'s entry guard both Snapshots
   are present and Snapshot-shaped (ADR 0017), so a table the Diff
   speaks of and the Snapshot lacks is a Diff/Snapshot mismatch — a bug
-  in whoever paired them, not malformed input the caller can fix."
+  in whoever paired them, not malformed input the caller can fix. The
+  entry guard's provenance check turns most such pairings away first,
+  but a `schema_version` is a mutation counter rather than a proof of
+  identity (ADR 0017), so this stays a live guard."
   [snapshot side tname]
   (or (some (fn [[k v]] (when (= (x/fold-name k) (x/fold-name tname)) v))
         (:tables snapshot))
@@ -1592,7 +1595,7 @@
   [x]
   (and (map? x) (map? (:tables x)) (map? (:views x))))
 
-(defn- check-context!
+(defn- validate-context!
   "ADR 0017's entry guard: planning reads whole table values out of the
   two Snapshots the Diff was computed from, so both are required
   arguments. One `:malformed-input` here, before any planning."
@@ -1601,29 +1604,27 @@
     (when-not (snapshot-shaped? snapshot)
       (u/malformed! (str "plan requires the " (name side) " Snapshot the Diff"
                       " was computed from as its " (name side) " argument")
-        {:side side :argument snapshot}))))
+        {:side side :snapshot snapshot}))))
 
-(defn- check-provenance!
+(defn- validate-provenance!
   "ADR 0017's provenance check — the pure-side sibling of `apply!`'s
   fingerprint probe: the Snapshots handed to `plan` must be the ones
-  `diff` compared. Whole provenance on the live side; on the declared
-  side `:sqlite-version` alone, since a declared Snapshot's
-  `:schema-version` counts the statements a throwaway pristine database
-  happened to take and so differs with no semantic difference behind
-  it. Swapping the two arguments fails on the live side, unless both
-  sides carry byte-identical provenance."
+  `diff` compared. `facet` is what each side compares: whole provenance
+  on the live side, `:sqlite-version` alone on the declared one, since
+  a declared Snapshot's `:schema-version` counts the statements a
+  throwaway pristine database happened to take and so differs with no
+  semantic difference behind it. Swapping the two arguments fails on
+  the live side, unless both carry byte-identical provenance."
   [live declared diff]
-  (when (not= (meta live) (:live-metadata diff))
-    (u/malformed! "the live Snapshot is not the one this Diff was computed from"
-      {:side :live
-       :snapshot-provenance (meta live)
-       :diff-provenance (:live-metadata diff)}))
-  (when (not= (:sqlite-version (meta declared))
-          (:sqlite-version (:declared-metadata diff)))
-    (u/malformed! "the declared Snapshot is not the one this Diff was computed from"
-      {:side :declared
-       :snapshot-provenance (meta declared)
-       :diff-provenance (:declared-metadata diff)})))
+  (doseq [[side snapshot from-diff facet]
+          [[:live live (:live-metadata diff) identity]
+           [:declared declared (:declared-metadata diff) :sqlite-version]]]
+    (when (not= (facet (meta snapshot)) (facet from-diff))
+      (u/malformed! (str "the " (name side) " Snapshot is not the one this Diff"
+                      " was computed from")
+        {:side side
+         :snapshot-provenance (meta snapshot)
+         :diff-provenance from-diff}))))
 
 (defn plan
   "Plan `diff` — computed from Snapshots `live` and `declared` — into an
@@ -1651,8 +1652,8 @@
   (`{:class :code :explanation}`) — never throws for refusals."
   ([live declared diff] (plan live declared diff {}))
   ([live declared diff opts]
-    (check-context! live declared)
-    (check-provenance! live declared diff)
+    (validate-context! live declared)
+    (validate-provenance! live declared diff)
     (let [capabilities (merge {:sqlite-version (:sqlite-version (meta live))
                                :rebuild? true}
                          (:capabilities opts))

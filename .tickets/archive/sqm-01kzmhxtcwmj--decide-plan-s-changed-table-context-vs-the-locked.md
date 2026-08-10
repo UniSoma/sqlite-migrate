@@ -1,30 +1,31 @@
 ---
 id: sqm-01kzmhxtcwmj
 title: plan takes both Snapshots positionally; the Diff stays lean (ADR 0017)
-status: in_progress
+status: closed
 type: task
 priority: 2
 mode: afk
 created: '2026-08-10T00:42:25.051829192Z'
-updated: '2026-08-10T16:27:15.998620648Z'
+updated: '2026-08-10T16:40:16.469192004Z'
+closed: '2026-08-10T16:40:16.469192004Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: ADR 0017 is recorded; ADRs 0013, 0006, and 0004 are amended to match
-  done: false
+  done: true
 - title: plan is [live declared diff] / [live declared diff opts]; opts is exactly {:capabilities :directives} and the 1-arity is gone
-  done: false
+  done: true
 - title: Missing context, live-provenance mismatch, and declared :sqlite-version mismatch each throw :malformed-input at plan's entry guard
-  done: false
+  done: true
 - title: The capabilities default reads the live Snapshot, not the Diff
-  done: false
+  done: true
 - title: CONTEXT.md splits Snapshot provenance from Stored CREATE sql; Diff, Plan, and Apply report entries updated
-  done: false
+  done: true
 - title: README.md, doc/recipes.md, and both plan docstrings show the new signature
-  done: false
+  done: true
 - title: A :rename-table directive on a Diff with no changed entry plans successfully
-  done: false
+  done: true
 - title: bb test passes and clj-kondo --lint src test is clean
-  done: false
+  done: true
 ---
 
 ## Description
@@ -145,3 +146,9 @@ budget is for no-op, round-trip, and convergence.
 
 Follow the ADR 0016 pattern (4582bb9 / 287dabe): "Record ADR 0017…" then
 "Implement ADR 0017…". `bb test` and `clj-kondo --lint src test` before each.
+
+## Notes
+
+**2026-08-10T16:40:16.469192004Z**
+
+Shipped in d031d2e / deb267f / 0153a5c. plan is [live declared diff] / [live declared diff opts] with opts back to {:capabilities :directives}; validate-context! and validate-provenance! throw :malformed-input at the entry (whole provenance live-side, :sqlite-version only declared-side), table-context's throw is demoted to :internal, and the capabilities default reads (:sqlite-version (meta live)). ADR 0017 recorded, 0013/0006/0004 amended, CONTEXT.md splits Snapshot provenance from Stored CREATE sql. 151 tests / 788 assertions green, lint clean.
