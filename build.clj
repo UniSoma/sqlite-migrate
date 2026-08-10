@@ -11,7 +11,7 @@
     [clojure.tools.build.api :as b]))
 
 (def lib 'io.github.unisoma/sqlite-migrate)
-(def version "0.1.0-SNAPSHOT")
+(def version "0.1.0")
 
 (def ^:private repo-url "https://github.com/unisoma/sqlite-migrate")
 (def ^:private class-dir "target/classes")

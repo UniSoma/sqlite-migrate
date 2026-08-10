@@ -6,7 +6,7 @@ Snapshot, diff it against a Declaration, and turn the Diff into an executable Pl
 ## Installation
 
 ```clojure
-io.github.unisoma/sqlite-migrate {:mvn/version "0.1.0-SNAPSHOT"}
+io.github.unisoma/sqlite-migrate {:mvn/version "0.1.0"}
 ```
 
 ## Quickstart

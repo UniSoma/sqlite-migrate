@@ -19,6 +19,7 @@
 | Domain vocabulary, glossary, design decisions | `CONTEXT.md`, `docs/adr/`, [docs/agents/domain.md](docs/agents/domain.md) |
 | Tickets: knot CLI gotchas | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) |
 | Triage roles → knot tags and `mode` (`afk`/`hitl`) | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) |
+| Cutting a release, and what earns a `CHANGELOG.md` entry | [docs/releasing.md](docs/releasing.md) |
 
 ## Working style
 
