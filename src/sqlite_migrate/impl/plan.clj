@@ -44,7 +44,8 @@
   version means \"latest\": every version gate passes."
   (:require [clojure.string :as str]
     [sqlite-migrate.impl.diff :as d]
-    [sqlite-migrate.impl.extract :as x]))
+    [sqlite-migrate.impl.extract :as x]
+    [sqlite-migrate.impl.util :as u]))
 
 (set! *warn-on-reflection* true)
 
@@ -74,14 +75,11 @@
 ;; ---------------------------------------------------------------------------
 ;; SQL emission
 
-(defn- q-ident ^String [^String s]
-  (str "\"" (str/replace s "\"" "\"\"") "\""))
-
 (defn- column-def-sql
   "The column-definition text an :add-column op appends, re-emitted from
   the declared column value's verbatim facts."
   [{:keys [name type not-null? default collate generated]}]
-  (str (q-ident name)
+  (str (u/q-ident name)
     (when (seq type) (str " " type))
     (when collate (str " COLLATE " collate))
     (when not-null? " NOT NULL")
@@ -200,7 +198,7 @@
       {:rebuild []}
       {:ops [(op [3 (x/fold-name tname) 3 "" -1] ; declared position patched by caller
                :add-column (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (q-ident tname) " ADD COLUMN " (column-def-sql col))])]})))
+               [(str "ALTER TABLE " (u/q-ident tname) " ADD COLUMN " (column-def-sql col))])]})))
 
 (defn- droppable-in-place?
   "Drop-column legality against the accumulated intermediate state: the
@@ -262,8 +260,8 @@
       {:ops [(op [3 (x/fold-name tname) 2 (x/fold-name (entry-name entry))]
                (if (:not-null? (:declared entry)) :set-not-null :drop-not-null)
                (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (q-ident tname) " ALTER COLUMN "
-                  (q-ident (entry-name entry))
+               [(str "ALTER TABLE " (u/q-ident tname) " ALTER COLUMN "
+                  (u/q-ident (entry-name entry))
                   (if (:not-null? (:declared entry)) " SET NOT NULL" " DROP NOT NULL"))])]}
       {:rebuild []})
     {:rebuild []}))
@@ -277,15 +275,15 @@
   (let [c (:declared entry)]
     (op (into [3 (x/fold-name tname) 4] (check-sort-key c (:path entry)))
       :add-check (:path entry) #{(:path entry)}
-      [(str "ALTER TABLE " (q-ident tname)
-         " ADD " (when (:name c) (str "CONSTRAINT " (q-ident (:name c)) " "))
+      [(str "ALTER TABLE " (u/q-ident tname)
+         " ADD " (when (:name c) (str "CONSTRAINT " (u/q-ident (:name c)) " "))
          "CHECK (" (:expr c) ")")])))
 
 (defn- drop-check-op [tname entry]
   (let [c (:live entry)]
     (op (into [3 (x/fold-name tname) 0] (check-sort-key c (:path entry)))
       :drop-check (:path entry) #{(:path entry)}
-      [(str "ALTER TABLE " (q-ident tname) " DROP CONSTRAINT " (q-ident (:name c)))])))
+      [(str "ALTER TABLE " (u/q-ident tname) " DROP CONSTRAINT " (u/q-ident (:name c)))])))
 
 (defn- route-check [capabilities tname entry]
   (let [gated (supports? capabilities v-alter-constraint)]
@@ -304,9 +302,9 @@
 (defn- drop-secondary-op [sub kind entry parent-fold]
   (let [nm (entry-name entry)
         stmt (case kind
-               :drop-index (str "DROP INDEX " (q-ident nm))
-               :drop-trigger (str "DROP TRIGGER " (q-ident nm))
-               :drop-view (str "DROP VIEW " (q-ident nm)))]
+               :drop-index (str "DROP INDEX " (u/q-ident nm))
+               :drop-trigger (str "DROP TRIGGER " (u/q-ident nm))
+               :drop-view (str "DROP VIEW " (u/q-ident nm)))]
     (op [1 sub parent-fold (x/fold-name nm)] kind (:path entry) #{(:path entry)} [stmt])))
 
 (defn- create-secondary-op [sub kind path serves parent-fold nm sql]
@@ -366,7 +364,7 @@
                                 (not (contains? #{"if" "not" "exists"} (:fold %))))
                           %)
                    (drop after-table toks))]
-    (str (subs sql 0 (:s name-tok)) (q-ident temp-name) (subs sql (:e name-tok)))))
+    (str (subs sql 0 (:s name-tok)) (u/q-ident temp-name) (subs sql (:e name-tok)))))
 
 (defn- rowid-alias-fold
   "The folded name of `table`'s INTEGER PRIMARY KEY column — the rowid
@@ -399,12 +397,12 @@
                  (not (:without-rowid? declared-table))
                  (not (and alias-fold
                         (some #(= alias-fold (x/fold-name (:name %))) shared))))
-        insert-cols (concat (when rowid? ["rowid"]) (map (comp q-ident :name) shared))
-        select-cols (concat (when rowid? ["rowid"]) (map (comp q-ident live-of) shared))]
+        insert-cols (concat (when rowid? ["rowid"]) (map (comp u/q-ident :name) shared))
+        select-cols (concat (when rowid? ["rowid"]) (map (comp u/q-ident live-of) shared))]
     (when (seq insert-cols)
-      (str "INSERT INTO " (q-ident temp-name) " (" (str/join ", " insert-cols)
+      (str "INSERT INTO " (u/q-ident temp-name) " (" (str/join ", " insert-cols)
         ") SELECT " (str/join ", " select-cols)
-        " FROM " (q-ident (:name live-table))))))
+        " FROM " (u/q-ident (:name live-table))))))
 
 (defn- sequence-restore-sqls
   "The statements restoring the AUTOINCREMENT counter (ADR 0010): lift
@@ -464,11 +462,11 @@
               (into (keep identity [(rebuild-copy-sql temp live-table declared-table renames)]))
               (into (when autoincrement?
                       (sequence-restore-sqls temp (:name live-table))))
-              (into (map #(str "DROP VIEW " (q-ident (:name %)))) (:views deps))
-              (into (map #(str "DROP TRIGGER " (q-ident (:name %)))) (:triggers deps))
-              (conj (str "DROP TABLE " (q-ident (:name live-table))))
-              (conj (str "ALTER TABLE " (q-ident temp)
-                      " RENAME TO " (q-ident (:name declared-table))))
+              (into (map #(str "DROP VIEW " (u/q-ident (:name %)))) (:views deps))
+              (into (map #(str "DROP TRIGGER " (u/q-ident (:name %)))) (:triggers deps))
+              (conj (str "DROP TABLE " (u/q-ident (:name live-table))))
+              (conj (str "ALTER TABLE " (u/q-ident temp)
+                      " RENAME TO " (u/q-ident (:name declared-table))))
               (into (for [[_ idx] (sort-by key (:indexes declared-table))]
                       (:sql (meta idx))))
               (into (for [[_ trg] (sort-by key (:triggers declared-table))]
@@ -500,7 +498,7 @@
   "The sampling SELECT over the live table: violating rows under
   `condition` (nil = every row violates), with the baked LIMIT."
   [live-tname condition]
-  (str "SELECT * FROM " (q-ident live-tname)
+  (str "SELECT * FROM " (u/q-ident live-tname)
     (when condition (str " WHERE " condition))
     " LIMIT " gate-sample-limit))
 
@@ -560,7 +558,7 @@
   "The bare SQL fragment of a `key-part` pair: the quoted live column,
   or the constant fragment verbatim."
   [[k v]]
-  (if (= :live k) (q-ident v) v))
+  (if (= :live k) (u/q-ident v) v))
 
 (defn- positional-group-const?
   "True when a :const key part's fragment is an integer literal —
@@ -615,7 +613,7 @@
   row. `where` is a partial index's verbatim predicate."
   [live-tname parts where]
   (str "SELECT " (str/join ", " (map :select parts)) ", COUNT(*) AS \"sqm_count\""
-    " FROM " (q-ident live-tname)
+    " FROM " (u/q-ident live-tname)
     " WHERE " (when where (str "(" where ") AND "))
     (str/join " AND " (map #(str (:bare %) " IS NOT NULL") parts))
     " GROUP BY " (group-by-list parts)
@@ -632,7 +630,7 @@
           [(gate :not-null (:path entry)
              (str "column " c " of table " t " becomes NOT NULL;"
                " a stored NULL there would be rejected")
-             (sampling-sql t (str (q-ident c) " IS NULL")))]))
+             (sampling-sql t (str (u/q-ident c) " IS NULL")))]))
       :added
       ;; an explicit DEFAULT NULL is no default here — SQLite rejects
       ;; the addition exactly like the bare NOT NULL once rows exist;
@@ -710,16 +708,16 @@
               (= (count ref-cols) (count key-parts)))
         (let [not-nulls (str/join " AND "
                           (keep (fn [[k v]] (when (= :live k)
-                                              (str (q-ident v) " IS NOT NULL")))
+                                              (str (u/q-ident v) " IS NOT NULL")))
                             key-parts))
               lookup (when parent-live
-                       (str "NOT EXISTS (SELECT 1 FROM " (q-ident (:name parent-live))
+                       (str "NOT EXISTS (SELECT 1 FROM " (u/q-ident (:name parent-live))
                          " AS \"sqm_parent\" WHERE "
                          (str/join " AND "
                            (map (fn [rc [k :as kp]]
-                                  (str "\"sqm_parent\"." (q-ident rc) " = "
+                                  (str "\"sqm_parent\"." (u/q-ident rc) " = "
                                     (if (= :live k)
-                                      (str (q-ident t) "." (key-part-sql kp))
+                                      (str (u/q-ident t) "." (key-part-sql kp))
                                       (key-part-sql kp))))
                              ref-cols key-parts))
                          ")"))
@@ -838,13 +836,13 @@
                       key-list (str/join ", " qs)
                       row (if (= 1 (count qs)) (first qs) (str "(" key-list ")"))
                       live-qs (into [] (comp (filter (comp #{:live} first))
-                                         (map (comp q-ident second)))
+                                         (map (comp u/q-ident second)))
                                 key-parts)
                       null-enforced? (and (not alias?) (seq live-qs)
                                        (or (:without-rowid? declared-table)
                                          (:strict? declared-table)))
                       group-list (group-by-list (map key-part-fragments key-parts))
-                      dup (str row " IN (SELECT " key-list " FROM " (q-ident t)
+                      dup (str row " IN (SELECT " key-list " FROM " (u/q-ident t)
                             " WHERE " (str/join " AND " (map #(str % " IS NOT NULL") qs))
                             " GROUP BY " group-list " HAVING COUNT(*) > 1)")]
                   [(gate :primary-key (:path entry)
@@ -859,7 +857,7 @@
             (let [conds (keep (fn [dc]
                                 (when (nil? (:generated dc))
                                   (when-let [lc (live-col-name gctx (:name dc))]
-                                    (strict-violation-condition (q-ident lc)
+                                    (strict-violation-condition (u/q-ident lc)
                                       (some-> (:type dc) x/fold-name)))))
                           (:columns declared-table))]
               (when (seq conds)
@@ -870,7 +868,7 @@
           (when (and (contains? facts :without-rowid?) (:without-rowid? declared-table))
             (let [parts (reduce (fn [acc n]
                                   (if-let [lc (live-col-name gctx n)]
-                                    (conj acc (str (q-ident lc) " IS NULL"))
+                                    (conj acc (str (u/q-ident lc) " IS NULL"))
                                     ;; a new PK column defaulting to NULL leaves
                                     ;; every copied row NULL there; a constant
                                     ;; or opaque default fills it (ADR 0015)
@@ -973,8 +971,8 @@
       {:rebuild []}
       {:ops [(op [3 (x/fold-name tname) 2 (x/fold-name from)]
                :rename-column (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (q-ident tname) " RENAME COLUMN "
-                  (q-ident from) " TO " (q-ident to))])]})))
+               [(str "ALTER TABLE " (u/q-ident tname) " RENAME COLUMN "
+                  (u/q-ident from) " TO " (u/q-ident to))])]})))
 
 (defn- route-table-entry
   "Route one entry of a changed regular table. `ctx` carries the live
@@ -1010,8 +1008,8 @@
             destructive? {:needs-intent [(destructive-refusal (entry-what entry))]}
             :else {:ops [(op [3 (x/fold-name tname) 1 (get (:drop-order ctx) col-fold)]
                            :drop-column (:path entry) #{(:path entry)}
-                           [(str "ALTER TABLE " (q-ident tname)
-                              " DROP COLUMN " (q-ident (:name col)))])]}))
+                           [(str "ALTER TABLE " (u/q-ident tname)
+                              " DROP COLUMN " (u/q-ident (:name col)))])]}))
         :changed (route-changed-column capabilities tname entry))
 
       (= :check seg) (route-check capabilities tname entry)
@@ -1122,7 +1120,7 @@
   declared name."
   [live-name declared-name serves]
   (op [3 (x/fold-name declared-name) -1] :rename-table [:table live-name] serves
-    [(str "ALTER TABLE " (q-ident live-name) " RENAME TO " (q-ident declared-name))]))
+    [(str "ALTER TABLE " (u/q-ident live-name) " RENAME TO " (u/q-ident declared-name))]))
 
 (defn- active-column-renames
   "The subset of one table's :rename-column claims that resolve
@@ -1398,7 +1396,7 @@
       (and whole (= :removed (:kind whole)))
       (if-let [directive (get (:drop-tables dctx) (x/fold-name tname))]
         {:ops [(op [2 (x/fold-name tname)] :drop-table (:path whole) #{(:path whole)}
-                 [(str "DROP TABLE " (q-ident tname))])]
+                 [(str "DROP TABLE " (u/q-ident tname))])]
          :unhandled {}
          :used [directive]}
         {:ops [] :unhandled {whole [(destructive-refusal (str "table " tname))]}})
@@ -1448,9 +1446,6 @@
    :drop-table [:table]
    :drop-column [:table :column]})
 
-(defn- malformed! [msg data]
-  (throw (ex-info msg (assoc data :sqlite-migrate/error :malformed-input))))
-
 (defn- directive-live-path
   "The live path a directive claims — every :table, :column, and :from
   key names a live object, identifiers folded exactly as the
@@ -1476,12 +1471,12 @@
   (let [ks (and (map? d) (keyword? (:directive d))
              (directive-keys (:directive d)))]
     (when-not ks
-      (malformed! (str "not a directive: expected a map whose :directive is one of "
-                    (str/join ", " (sort (keys directive-keys))))
+      (u/malformed! (str "not a directive: expected a map whose :directive is one of "
+                      (str/join ", " (sort (keys directive-keys))))
         {:directive d}))
     (doseq [k ks]
       (when-not (string? (get d k))
-        (malformed! (str "directive " (:directive d) " requires a string " k)
+        (u/malformed! (str "directive " (:directive d) " requires a string " k)
           {:directive d :missing k})))))
 
 (defn- validate-directives!
@@ -1495,12 +1490,12 @@
   (let [dup (fn [f] (->> directives (keep f) frequencies
                       (some (fn [[path n]] (when (> n 1) path)))))]
     (when-let [path (dup directive-live-path)]
-      (malformed! (str "conflicting directives: the live path " path
-                    " is claimed twice")
+      (u/malformed! (str "conflicting directives: the live path " path
+                      " is claimed twice")
         {:path path :directives (vec directives)}))
     (when-let [path (dup directive-declared-target)]
-      (malformed! (str "conflicting directives: the declared target " path
-                    " is claimed twice")
+      (u/malformed! (str "conflicting directives: the declared target " path
+                      " is claimed twice")
         {:path path :directives (vec directives)})))
   (let [dropped-tables (into #{} (comp (filter #(= :drop-table (:directive %)))
                                    (map (comp x/fold-name :table)))
@@ -1508,9 +1503,9 @@
     (doseq [d directives]
       (when (and (= :rename-column (:directive d))
               (contains? dropped-tables (x/fold-name (:table d))))
-        (malformed! (str "conflicting directives: table " (:table d)
-                      " is dropped, but a column rename inside it claims"
-                      " its data survives")
+        (u/malformed! (str "conflicting directives: table " (:table d)
+                        " is dropped, but a column rename inside it claims"
+                        " its data survives")
           {:directive d :directives (vec directives)})))))
 
 ;; ---------------------------------------------------------------------------

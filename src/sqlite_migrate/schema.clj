@@ -3,12 +3,8 @@
   describing target state, mirroring the Snapshot's nesting — compiled
   by `->sql` to a vector of SQL statement strings the core consumes as
   a normal Declaration. Pure; depends on nothing in the core."
-  (:require [clojure.string :as str]))
-
-(defn- malformed!
-  "Throw the `:malformed-input` taxonomy error with `msg` and `data`."
-  [msg data]
-  (throw (ex-info msg (assoc data :sqlite-migrate/error :malformed-input))))
+  (:require [clojure.string :as str]
+    [sqlite-migrate.impl.util :as u]))
 
 (defn- identifier
   "Compile `x` (keyword or string) to a quoted identifier spelled
@@ -18,9 +14,9 @@
   (let [s (cond
             (keyword? x) (name x)
             (string? x) x
-            :else (malformed! (str "identifier must be a keyword or string: " (pr-str x))
+            :else (u/malformed! (str "identifier must be a keyword or string: " (pr-str x))
                     {:value x}))]
-    (str "\"" (str/replace s "\"" "\"\"") "\"")))
+    (u/q-ident s)))
 
 (def ^:private strict-types
   "The STRICT-legal column type keywords and their canonical uppercase
@@ -35,9 +31,9 @@
   (cond
     (string? t) t
     (contains? strict-types t) (strict-types t)
-    :else (malformed! (str "unknown column type keyword: " (pr-str t)
-                        " — use one of " (pr-str (sort (keys strict-types)))
-                        " or a string passed through verbatim")
+    :else (u/malformed! (str "unknown column type keyword: " (pr-str t)
+                          " — use one of " (pr-str (sort (keys strict-types)))
+                          " or a string passed through verbatim")
             {:type t})))
 
 (defn- raw?
@@ -52,7 +48,7 @@
   [x position]
   (if (raw? x)
     (second x)
-    (malformed! (str position " takes [:raw \"...\"] — got " (pr-str x))
+    (u/malformed! (str position " takes [:raw \"...\"] — got " (pr-str x))
       {:value x})))
 
 (defn- default-value
@@ -63,8 +59,8 @@
     (number? x) (str x)
     (raw? x) (second x)
     (string? x) (str "'" (str/replace x "'" "''") "'")
-    :else (malformed! (str ":default takes a number, a string literal, or [:raw \"...\"] — got "
-                        (pr-str x))
+    :else (u/malformed! (str ":default takes a number, a string literal, or [:raw \"...\"] — got "
+                          (pr-str x))
             {:value x})))
 
 (defn- column-def
@@ -124,9 +120,9 @@
   (cond
     (string? a) a
     (contains? fk-actions a) (fk-actions a)
-    :else (malformed! (str "unknown foreign-key action keyword: " (pr-str a)
-                        " — use one of " (pr-str (sort (keys fk-actions)))
-                        " or a string passed through verbatim")
+    :else (u/malformed! (str "unknown foreign-key action keyword: " (pr-str a)
+                          " — use one of " (pr-str (sort (keys fk-actions)))
+                          " or a string passed through verbatim")
             {:action a})))
 
 (defn- foreign-key-clause
@@ -176,8 +172,8 @@
   (cond
     (string? x) x
     (raw? x) (second x)
-    :else (malformed! (str position " is raw-only at launch — a whole SQL statement string or "
-                        "[:raw \"...\"], got " (pr-str x))
+    :else (u/malformed! (str position " is raw-only at launch — a whole SQL statement string or "
+                          "[:raw \"...\"], got " (pr-str x))
             {:value x})))
 
 (defn- table-statements

@@ -14,7 +14,10 @@
     [sqlite-migrate.impl.extract :as x]
     [sqlite-migrate.impl.plan :as pl]
     [sqlite-migrate.impl.report :as r]
+    [sqlite-migrate.impl.util :as u]
     [sqlite-migrate.protocols :as p]))
+
+(set! *warn-on-reflection* true)
 
 ;; ---------------------------------------------------------------------------
 ;; Introspection
@@ -213,7 +216,7 @@
           (bail! (str "Declaration statement " index " created engine-internal"
                    " table " name " — a Snapshot cannot capture what it does")
             {:table name}))
-        (when (seq (q conn (str "SELECT 1 FROM \"" (.replace ^String name "\"" "\"\"") "\" LIMIT 1")))
+        (when (seq (q conn (str "SELECT 1 FROM " (u/q-ident name) " LIMIT 1")))
           (bail! (str "Declaration statement " index " left rows in table "
                    name " — a Snapshot carries schema, never data")
             {:table name}))))))
