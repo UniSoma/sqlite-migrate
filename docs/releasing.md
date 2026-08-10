@@ -55,23 +55,34 @@ Local, before anything leaves the machine:
 7. Tag it annotated: `git tag -a vX.Y.Z`. `build.clj`'s `scm` uses the tag as
    the release's SCM metadata, so it carries a message rather than being
    lightweight.
-8. Commit `chore(release): Begin <next>-SNAPSHOT`, touching `build.clj` alone.
-   Accretion means the next version is normally a minor bump.
 
 Then the network steps, in this order:
 
-9. `git push`.
-10. Wait for CI to go green **on the tagged commit** — the version matrix plus
-    the native-image smoke job.
-11. `git push origin vX.Y.Z`.
-12. `bb deploy`. Needs `CLOJARS_USERNAME` / `CLOJARS_PASSWORD` set to a Clojars
+8. `git push`.
+9. Wait for CI to go green **on the tagged commit** — the version matrix plus
+   the native-image smoke job.
+10. `git push origin vX.Y.Z`.
+11. `bb deploy`. Needs `CLOJARS_USERNAME` / `CLOJARS_PASSWORD` set to a Clojars
     deploy token. Clojars fixed releases are immutable: this is the point of no
     return.
-13. `bb cljdoc` to trigger the doc build, then confirm the article tree and the
+12. `bb cljdoc` to trigger the doc build, then confirm the article tree and the
     `sqlite-migrate.protocols` docstrings render at
     <https://cljdoc.org/d/io.github.unisoma/sqlite-migrate>.
-14. Create a GitHub Release on the tag, with that version's changelog section
+13. Create a GitHub Release on the tag, with that version's changelog section
     as the body.
+
+Only once the release is published:
+
+14. Commit `chore(release): Begin <next>-SNAPSHOT`, touching `build.clj` alone.
+    Accretion means the next version is normally a minor bump.
+
+**The bump is last, and that ordering is load-bearing.** `bb deploy` and
+`bb cljdoc` read `version` out of the working tree's `build.clj` — neither
+looks at the tag. Bumping before deploying leaves the tree one commit past the
+release, and the deploy silently publishes the *next* `-SNAPSHOT` instead of
+the version you tagged. If the tree has already moved on, do not deploy from
+it: check the tag out first (`git checkout vX.Y.Z`), deploy from there, and
+return to `main` afterwards.
 
 ## Version policy
 
