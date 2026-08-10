@@ -73,6 +73,34 @@
     (testing "the planned rebuild converges the live database"
       (is (converges? live declared)))))
 
+(deftest rebuild-names-the-temp-table-when-the-table-is-named-if
+  ;; the temp-name substitution steps over IF NOT EXISTS by keyword
+  ;; fold, so a table quoted "if" once ate the skip and the first
+  ;; column took the temp name instead
+  (doseq [nm ["if" "not" "exists"]]
+    (testing (str "a table named " (pr-str nm) " rebuilds under the temp name, not its first column")
+      (let [live [(str "CREATE TABLE \"" nm "\" (a INT)")]
+            declared [(str "CREATE TABLE \"" nm "\" (a INTEGER)")]
+            pl (plan-of live declared)]
+        (is (= [(str "CREATE TABLE \"" nm "__sqm_rebuild\" (a INTEGER)")
+                (str "INSERT INTO \"" nm "__sqm_rebuild\" (rowid, \"a\") SELECT rowid, \"a\" FROM \"" nm "\"")
+                (str "DROP TABLE \"" nm "\"")
+                (str "ALTER TABLE \"" nm "__sqm_rebuild\" RENAME TO \"" nm "\"")]
+              (:sql (first (:ops pl)))))
+        (is (converges? live declared)
+          "the rebuild must run against real SQLite, not abort on a name collision")))))
+
+(deftest rebuild-of-an-if-not-exists-declaration-names-the-temp-table
+  ;; SQLite stores the CREATE sql with IF NOT EXISTS normalized away,
+  ;; so the substitution never meets the clause on this path — the skip
+  ;; stands as a guard, and this pins the spelling it actually sees
+  (let [live ["CREATE TABLE IF NOT EXISTS t (a INT)"]
+        declared ["CREATE TABLE IF NOT EXISTS t (a INTEGER)"]
+        pl (plan-of live declared)]
+    (is (= "CREATE TABLE \"t__sqm_rebuild\" (a INTEGER)"
+          (first (:sql (first (:ops pl))))))
+    (is (converges? live declared))))
+
 ;; ---------------------------------------------------------------------------
 ;; Per-table selection rule: all in-place or one rebuild, never mixed
 

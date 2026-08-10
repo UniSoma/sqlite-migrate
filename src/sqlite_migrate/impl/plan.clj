@@ -396,15 +396,17 @@
   "The declared table's verbatim CREATE sql with its table-name token
   replaced by the quoted `temp-name` — token substitution (never a
   parser): the first identifier after the TABLE keyword, IF NOT EXISTS
-  skipped."
+  skipped. Only a bare word can be one of those keywords — a quoted
+  identifier spelling `if` is a table named `if`."
   [^String sql temp-name]
   (let [toks (x/tokenize sql)
         after-table (inc (long (first (keep-indexed
                                         (fn [i t]
                                           (when (and (= :word (:t t)) (= "table" (:fold t))) i))
                                         toks))))
-        name-tok (some #(when (and (#{:word :qid} (:t %))
-                                (not (contains? #{"if" "not" "exists"} (:fold %))))
+        name-tok (some #(when (or (= :qid (:t %))
+                                (and (= :word (:t %))
+                                  (not (contains? #{"if" "not" "exists"} (:fold %)))))
                           %)
                    (drop after-table toks))]
     (str (subs sql 0 (:s name-tok)) (u/quote-identifier temp-name) (subs sql (:e name-tok)))))
