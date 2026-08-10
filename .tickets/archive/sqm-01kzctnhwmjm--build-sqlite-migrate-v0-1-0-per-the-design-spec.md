@@ -1,12 +1,13 @@
 ---
 id: sqm-01kzctnhwmjm
 title: Build sqlite-migrate v0.1.0 per the design spec
-status: open
+status: closed
 type: epic
 priority: 2
 mode: afk
 created: '2026-08-07T00:41:15.924087020Z'
-updated: '2026-08-07T00:41:15.924087020Z'
+updated: '2026-08-10T20:57:41.459606446Z'
+closed: '2026-08-10T20:57:41.459606446Z'
 ---
 
 ## Description
@@ -152,3 +153,9 @@ Four generators drive them: a schema generator emitting shrinkable EDN Schema va
 - The concrete CI floor version is a build-time choice (oldest sqlite-jdbc conveniently pinnable), not a spec commitment.
 - Deliverables beyond code: README with quickstart and CI drift recipe, stage-then-swap and converge-on-startup recipes, cljdoc articles, `build.clj` + `bb.edn` release tasks modeled on mantine-ui-wrapper (with real POM deps, no source-only surgery).
 - Research background lives on `research/*` branches (`docs/research/` files): SQLite DDL capabilities, babashka/Graal access, migration prior art.
+
+## Notes
+
+**2026-08-10T20:57:41.459606446Z**
+
+sqlite-migrate v0.1.0 is built: all 28 children closed. The pipeline ships as designed — snapshot/declared-snapshot introspect into one canonical Snapshot shape, diff produces the flat plain-EDN Diff with drift?/drift-report/by-object over it, plan compiles Ops with Gates, Refusals, Capabilities and Directives, and check/apply! run them through the SQLiteExecutor seam with the unconditional Frame. ADRs 0001-0017 govern; the six locked properties plus the schema/mutation/row generators and the nasty-schema corpus back it. Later work (release cut, remaining docs polish) opens as its own tickets.
