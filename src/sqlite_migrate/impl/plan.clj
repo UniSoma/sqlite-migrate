@@ -155,12 +155,37 @@
 ;;   {:rebuild extra-refusals}  — the only route is a rebuild
 ;;   {:refuse [refusals]}       — no route at all (unsupported/virtual)
 
+;; The locked phase order (see the ns docstring), named so the :order
+;; sort keys read as phases rather than bare numbers.
+(def ^:private phase-drop-secondary 1)
+(def ^:private phase-drop-tables 2)
+(def ^:private phase-change-tables 3)
+(def ^:private phase-create-tables 4)
+(def ^:private phase-create-secondary 5)
+
+;; Sub-phases inside one changed table (phase 3). NOT NULL alters and
+;; column renames share sub-alter-column, per the ns docstring.
+(def ^:private sub-rename-table -1)
+(def ^:private sub-drop-check 0)
+(def ^:private sub-drop-column 1)
+(def ^:private sub-alter-column 2)
+(def ^:private sub-add-column 3)
+(def ^:private sub-add-check 4)
+
+;; An :add-column key carries this placeholder until `declared-position`
+;; patches in the column's declared-order index.
+(def ^:private unpatched-position -1)
+
+(def ^:private order-pad 0)
+
 (defn- op
   "An op with its plan-position sort key. Order vectors are padded to a
-  fixed length: `compare` ranks vectors by length before content, and
-  the phases emit keys of different arities."
+  fixed length with `order-pad`: `compare` ranks vectors by length
+  before content, and the phases emit keys of different arities. The
+  -1 sentinels (`sub-rename-table`, `unpatched-position`) intentionally
+  sort before the pad."
   [order kind path serves sql]
-  {:order (vec (take 6 (concat order (repeat 0))))
+  {:order (vec (take 6 (concat order (repeat order-pad))))
    :op {:kind kind :path path :serves serves :sql sql}})
 
 (defn- entry-name [entry] (peek (:path entry)))
@@ -179,24 +204,24 @@
 (defn- route-added-column
   [capabilities tname entry appendable?]
   (let [col (:declared entry)
-        gate (fn [ok? minimum what]
-               (when-not ok?
-                 (if (supports? capabilities minimum) nil [minimum what])))
+        version-floor (fn [ok? minimum what]
+                        (when-not ok?
+                          (if (supports? capabilities minimum) nil [minimum what])))
         blocked (or (when (pos? (:pk col)) :pk)
                   (when-not appendable? :position)
                   (first
                     (keep identity
-                      [(gate (or (not (:not-null? col)) (some? (:default col)))
+                      [(version-floor (or (not (:not-null? col)) (some? (:default col)))
                          v-alter-constraint "adding a NOT NULL column without a default")
-                       (gate (not (current-word? (:default col)))
+                       (version-floor (not (current-word? (:default col)))
                          v-alter-constraint "adding a column with a CURRENT_* default")
-                       (gate (not= :stored (:storage (:generated col)))
+                       (version-floor (not= :stored (:storage (:generated col)))
                          v-alter-constraint "adding a STORED generated column")
-                       (gate (nil? (:generated col))
+                       (version-floor (nil? (:generated col))
                          v-generated "adding a generated column")])))]
     (if blocked
       {:rebuild []}
-      {:ops [(op [3 (x/fold-name tname) 3 "" -1] ; declared position patched by caller
+      {:ops [(op [phase-change-tables (x/fold-name tname) sub-add-column "" unpatched-position]
                :add-column (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/q-ident tname) " ADD COLUMN " (column-def-sql col))])]})))
 
@@ -257,7 +282,8 @@
 (defn- route-changed-column [capabilities tname entry]
   (if (= #{:not-null?} (:facts entry))
     (if (supports? capabilities v-alter-constraint)
-      {:ops [(op [3 (x/fold-name tname) 2 (x/fold-name (entry-name entry))]
+      {:ops [(op [phase-change-tables (x/fold-name tname) sub-alter-column
+                  (x/fold-name (entry-name entry))]
                (if (:not-null? (:declared entry)) :set-not-null :drop-not-null)
                (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/q-ident tname) " ALTER COLUMN "
@@ -266,14 +292,18 @@
       {:rebuild []})
     {:rebuild []}))
 
-(defn- check-sort-key [c path]
+(defn- check-sort-key
+  "The tail of a check op's sort key: named checks (0) sort before
+  anonymous ones (1), by folded name and diff position respectively."
+  [c path]
   (if (:name c)
     [0 (x/fold-name (:name c)) -1]
     [1 "" (peek path)]))
 
 (defn- add-check-op [tname entry]
   (let [c (:declared entry)]
-    (op (into [3 (x/fold-name tname) 4] (check-sort-key c (:path entry)))
+    (op (into [phase-change-tables (x/fold-name tname) sub-add-check]
+          (check-sort-key c (:path entry)))
       :add-check (:path entry) #{(:path entry)}
       [(str "ALTER TABLE " (u/q-ident tname)
          " ADD " (when (:name c) (str "CONSTRAINT " (u/q-ident (:name c)) " "))
@@ -281,7 +311,8 @@
 
 (defn- drop-check-op [tname entry]
   (let [c (:live entry)]
-    (op (into [3 (x/fold-name tname) 0] (check-sort-key c (:path entry)))
+    (op (into [phase-change-tables (x/fold-name tname) sub-drop-check]
+          (check-sort-key c (:path entry)))
       :drop-check (:path entry) #{(:path entry)}
       [(str "ALTER TABLE " (u/q-ident tname) " DROP CONSTRAINT " (u/q-ident (:name c)))])))
 
@@ -305,10 +336,11 @@
                :drop-index (str "DROP INDEX " (u/q-ident nm))
                :drop-trigger (str "DROP TRIGGER " (u/q-ident nm))
                :drop-view (str "DROP VIEW " (u/q-ident nm)))]
-    (op [1 sub parent-fold (x/fold-name nm)] kind (:path entry) #{(:path entry)} [stmt])))
+    (op [phase-drop-secondary sub parent-fold (x/fold-name nm)]
+      kind (:path entry) #{(:path entry)} [stmt])))
 
 (defn- create-secondary-op [sub kind path serves parent-fold nm sql]
-  (op [5 sub parent-fold (x/fold-name nm)] kind path serves [sql]))
+  (op [phase-create-secondary sub parent-fold (x/fold-name nm)] kind path serves [sql]))
 
 (defn- route-index [entry tname]
   (let [tfold (x/fold-name tname)]
@@ -497,7 +529,7 @@
         sql (-> (rebuild-stage-sqls temp live-table declared-table renames)
               (into (rebuild-swap-sqls temp live-table declared-table deps))
               (into (rebuild-recreate-sqls declared-table deps)))]
-    (op [3 tfold] :rebuild-table [:table tname] serves sql)))
+    (op [phase-change-tables tfold] :rebuild-table [:table tname] serves sql)))
 
 ;; ---------------------------------------------------------------------------
 ;; Gates (ADR 0008): data preconditions as plan-compiled sampling
@@ -666,7 +698,7 @@
              (sampling-sql t nil))]))
       nil)))
 
-(defn- check-gates [gctx entry]
+(defn- check-constraint-gates [gctx entry]
   (when (contains? #{:added :changed} (:kind entry))
     (let [t (:name (:live-table gctx))
           expr (:expr (:declared entry))]
@@ -929,7 +961,7 @@
     (cond
       (= 2 (count path)) (table-gates gctx entry)
       (= :column seg) (column-gates gctx entry)
-      (= :check seg) (check-gates gctx entry)
+      (= :check seg) (check-constraint-gates gctx entry)
       (= :unique seg) (unique-gates gctx entry)
       (= :foreign-key seg) (foreign-key-gates gctx entry)
       (= :index seg) (index-gates gctx entry)
@@ -992,7 +1024,7 @@
           (:rename-collision? ctx)
           (not (supports? capabilities v-rename-column)))
       {:rebuild []}
-      {:ops [(op [3 (x/fold-name tname) 2 (x/fold-name from)]
+      {:ops [(op [phase-change-tables (x/fold-name tname) sub-alter-column (x/fold-name from)]
                :rename-column (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/q-ident tname) " RENAME COLUMN "
                   (u/q-ident from) " TO " (u/q-ident to))])]})))
@@ -1029,7 +1061,8 @@
             (not in-place?) {:rebuild (when destructive?
                                         [(destructive-refusal (entry-what entry))])}
             destructive? {:needs-intent [(destructive-refusal (entry-what entry))]}
-            :else {:ops [(op [3 (x/fold-name tname) 1 (get (:drop-order ctx) col-fold)]
+            :else {:ops [(op [phase-change-tables (x/fold-name tname) sub-drop-column
+                              (get (:drop-order ctx) col-fold)]
                            :drop-column (:path entry) #{(:path entry)}
                            [(str "ALTER TABLE " (u/q-ident tname)
                               " DROP COLUMN " (u/q-ident (:name col)))])]}))
@@ -1142,7 +1175,8 @@
   phase-3 op of the fused table, so later in-place ops target the
   declared name."
   [live-name declared-name serves]
-  (op [3 (x/fold-name declared-name) -1] :rename-table [:table live-name] serves
+  (op [phase-change-tables (x/fold-name declared-name) sub-rename-table]
+    :rename-table [:table live-name] serves
     [(str "ALTER TABLE " (u/q-ident live-name) " RENAME TO " (u/q-ident declared-name))]))
 
 (defn- active-column-renames
@@ -1393,7 +1427,7 @@
   (let [t (:declared entry)
         tfold (x/fold-name (:name t))
         serves #{(:path entry)}]
-    (into [(op [4 tfold] :create-table (:path entry) serves [(:sql t)])]
+    (into [(op [phase-create-tables tfold] :create-table (:path entry) serves [(:sql t)])]
       (concat
         (for [[nm idx] (sort-by key (:indexes t))]
           (create-secondary-op 0 :create-index (conj (:path entry) :index nm)
@@ -1418,7 +1452,8 @@
 
       (and whole (= :removed (:kind whole)))
       (if-let [directive (get (:drop-tables dctx) (x/fold-name tname))]
-        {:ops [(op [2 (x/fold-name tname)] :drop-table (:path whole) #{(:path whole)}
+        {:ops [(op [phase-drop-tables (x/fold-name tname)]
+                 :drop-table (:path whole) #{(:path whole)}
                  [(str "DROP TABLE " (u/q-ident tname))])]
          :unhandled {}
          :used [directive]}
