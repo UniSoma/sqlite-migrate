@@ -554,6 +554,14 @@
         (= retype-col f) (str "'zz" i "'")
         :else (literal (:type c) i)))))
 
+(defn- column-literal
+  "The literal `row-literals` writes for `table`'s column named `cname`
+  in row `i` — how an existing row actually spells that column, so a
+  violating extra can duplicate it exactly."
+  [table fk-cols retype-col cname i]
+  (some (fn [[c lit]] (when (= (fold cname) (fold (:name c))) lit))
+    (map vector (:columns table) (row-literals table fk-cols retype-col i {}))))
+
 (defn- insert-sql [table literals]
   (str "INSERT INTO " (qid (:name table))
     " (" (str/join ", " (map (comp qid :name) (:columns table))) ")"
@@ -600,12 +608,15 @@
                    (when adding?
                      [(row-literals table fk-cols retype-col n {(fold column) "NULL"})])
                    :toggle-unique
+                   ;; the duplicate must repeat what row 0 really holds:
+                   ;; an FK child column holds NULL there, and NULLs
+                   ;; never collide — nor could a non-NULL one, with no
+                   ;; parent row to point at — so that column yields no
+                   ;; violating row at all
                    (when adding?
-                     [(row-literals table fk-cols retype-col n
-                        {(fold column) (first (row-literals
-                                                {:columns [(first (filter #(= (fold column) (fold (:name %)))
-                                                                    (:columns table)))]}
-                                                #{} nil 0 {}))})])
+                     (let [dup (column-literal table fk-cols retype-col column 0)]
+                       (when-not (= "NULL" dup)
+                         [(row-literals table fk-cols retype-col n {(fold column) dup})])))
                    :toggle-strict
                    ;; rowid-alias INTEGER PKs reject non-integers even
                    ;; without STRICT — the live insert itself would fail
