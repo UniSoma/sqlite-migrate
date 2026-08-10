@@ -1,5 +1,5 @@
 (ns sqlite-migrate.gates-test
-  "Gates and Check (ADR 0008, 0010, 0011): data preconditions as
+  "Gates and Check (ADR 0008, 0010, 0011, 0018, 0019): data preconditions as
   plan-compiled sampling SELECTs on the Op that needs them, the public
   `check` surface at the effectful edge, and apply!'s default up-front
   gate-check inside the Frame. Covers the launch gate inventory's
@@ -9,8 +9,18 @@
   (:require [clojure.string :as str]
     [clojure.test :refer [deftest is testing]]
     [sqlite-migrate.core :as m]
+    [sqlite-migrate.impl.plan :as plan]
     [sqlite-migrate.jdbc :as sql-jdbc]
     [sqlite-migrate.protocols :as p]))
+
+(def ^:private lim
+  "The sample limit the planner bakes into every Gate. Read from the
+  planner, never written as a literal: ADR 0019 puts the value outside
+  the stability promise, so a test that spells it out pins what the ADR
+  declares unpinned. The expected `:sql` strings below stay literal —
+  those assert the byte-identical determinism contract, where a changed
+  string should fail loudly and be reviewed."
+  plan/gate-sample-limit)
 
 (defn- snap
   "Snapshot of `declaration` realized into a fresh in-memory pristine
@@ -45,7 +55,7 @@
                 :path [:table "t" :column "b"]
                 :explanation "column b of table t becomes NOT NULL; a stored NULL there would be rejected"
                 :sql "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT 10"
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))
       (is (empty? (:unhandled pl)))))
   (testing "the same tightening collapsed onto a rebuild rides the :rebuild-table op"
@@ -56,7 +66,7 @@
                 :path [:table "t" :column "b"]
                 :explanation "column b of table t becomes NOT NULL; a stored NULL there would be rejected"
                 :sql "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT 10"
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "dropping NOT NULL carries no gate — relaxation destroys nothing"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"]
@@ -74,7 +84,7 @@
                 :path [:table "t" :check "c1"]
                 :explanation "table t adds CHECK (a > 0); rows where the expression is false or NULL would be rejected"
                 :sql "SELECT * FROM \"t\" WHERE NOT (a > 0) OR (a > 0) IS NULL LIMIT 10"
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "a changed CHECK gates on the recreating :add-check op, not the drop"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER, CONSTRAINT c1 CHECK (a > 0))"]
@@ -102,7 +112,7 @@
                 :path [:table "t" :column "b"]
                 :explanation "column b is added NOT NULL with no default; table t must be empty"
                 :sql "SELECT * FROM \"t\" LIMIT 10"
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "the same addition collapsed onto a rebuild carries the same gate"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER, z TEXT)"]
@@ -133,7 +143,7 @@
                      " WHERE \"a\" IS NOT NULL"
                      " GROUP BY \"a\" COLLATE BINARY"
                      " HAVING COUNT(*) > 1 LIMIT 10")
-              :limit 10}]]
+              :limit lim}]]
           (gates-of pl))))
   (testing "a non-unique index carries no gate"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
@@ -161,7 +171,7 @@
                        " WHERE ('x') IS NOT NULL"
                        " GROUP BY ('x') COLLATE BINARY"
                        " HAVING COUNT(*) > 1 LIMIT 10")
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "a new NULL-defaulted key column keeps every key distinct — no gate"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
@@ -183,7 +193,7 @@
                      " WHERE \"a\" IS NOT NULL AND \"b\" IS NOT NULL"
                      " GROUP BY \"a\", \"b\""
                      " HAVING COUNT(*) > 1 LIMIT 10")
-              :limit 10}]]
+              :limit lim}]]
           (gates-of pl))))
   (testing "a part-new key gates the live subset with the new column's constant substituted (ADR 0015)"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
@@ -212,7 +222,7 @@
                 :sql (str "SELECT * FROM \"t\" WHERE \"b\" IN"
                        " (SELECT \"b\" FROM \"t\" WHERE \"b\" IS NOT NULL"
                        " GROUP BY \"b\" HAVING COUNT(*) > 1) LIMIT 10")
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "an added INTEGER PRIMARY KEY alias gates duplicates only — NULLs auto-assign"
     (let [pl (plan-of ["CREATE TABLE t (a INTEGER, b TEXT)"]
@@ -244,7 +254,7 @@
                 :sql (str "SELECT * FROM \"t\" WHERE ('x') IN"
                        " (SELECT ('x') FROM \"t\" WHERE ('x') IS NOT NULL"
                        " GROUP BY ('x') HAVING COUNT(*) > 1) LIMIT 10")
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "a new INTEGER PRIMARY KEY alias column carries no gate — the copy auto-assigns rowids"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (b TEXT)"]
@@ -265,12 +275,12 @@
              :path [:table "t"]
              :explanation "table t converts to WITHOUT ROWID; primary-key columns must be non-NULL"
              :sql "SELECT * FROM \"t\" WHERE \"k\" IS NULL LIMIT 10"
-             :limit 10}
+             :limit lim}
             {:code :not-null
              :path [:table "t" :column "k"]
              :explanation "column k of table t becomes NOT NULL; a stored NULL there would be rejected"
              :sql "SELECT * FROM \"t\" WHERE \"k\" IS NULL LIMIT 10"
-             :limit 10}]
+             :limit lim}]
           (mapv second (gates-of pl))))
     (is (= [:rebuild-table] (mapv :kind (:ops pl))))))
 
@@ -290,7 +300,7 @@
     (is (= {:code :strict
             :path [:table "t"]
             :explanation "table t converts to STRICT; every stored value must match its column's declared type"
-            :limit 10}
+            :limit lim}
           (dissoc g :sql)))
     (testing "the non-text arms keep their storage-class checks; the text arm decomposes the literal grammar over the whitespace-trimmed value"
       (is (str/starts-with? (:sql g)
@@ -320,7 +330,7 @@
               :sql (str "SELECT * FROM \"c\" WHERE \"pid\" IS NOT NULL"
                      " AND NOT EXISTS (SELECT 1 FROM \"p\" AS \"sqm_parent\""
                      " WHERE \"sqm_parent\".\"id\" = \"c\".\"pid\") LIMIT 10")
-              :limit 10}]]
+              :limit lim}]]
           (gates-of pl))))
   (testing "an FK over a new constant-defaulted child column looks the constant up in the parent (ADR 0015)"
     (let [shared "CREATE TABLE p (id INTEGER PRIMARY KEY)"
@@ -335,7 +345,7 @@
                 :sql (str "SELECT * FROM \"c\" WHERE NOT EXISTS"
                        " (SELECT 1 FROM \"p\" AS \"sqm_parent\""
                        " WHERE \"sqm_parent\".\"id\" = (99)) LIMIT 10")
-                :limit 10}]]
+                :limit lim}]]
             (gates-of pl)))))
   (testing "a named FK whose action alone changes carries no gate — no row precondition"
     (let [shared "CREATE TABLE p (id INTEGER PRIMARY KEY)"
@@ -405,13 +415,39 @@
   (with-open [live (sql-jdbc/in-memory)]
     (p/execute-batch! live
       (into ["CREATE TABLE t (a INTEGER, b TEXT)"]
-        (map #(str "INSERT INTO t (a, b) VALUES (" % ", NULL)") (range 12))))
+        (map #(str "INSERT INTO t (a, b) VALUES (" % ", NULL)") (range (+ lim 2)))))
     (let [result (m/check live (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"]))
           g (first (:gates result))]
       (is (false? (:pass? result)))
-      (is (= 10 (:violations g)))
+      (is (= lim (:violations g)))
       (is (true? (:more? g)) "limit rows report as \"limit or more\"")
-      (is (= 10 (count (:sample-rows g)))))))
+      (is (= lim (count (:sample-rows g)))))))
+
+(deftest check-reads-more-from-the-gates-own-limit-not-the-planners
+  (testing "a Plan compiled under a different sample limit still reports \"or more\" truthfully (ADR 0019)"
+    (with-open [live (sql-jdbc/in-memory)]
+      (p/execute-batch! live
+        (into ["CREATE TABLE t (a INTEGER, b TEXT)"]
+          (map #(str "INSERT INTO t (a, b) VALUES (" % ", NULL)") (range 8))))
+      ;; A Plan as it would deserialize from a release whose baked limit
+      ;; was 3 — below the planner's current one, and below the 8 rows
+      ;; that violate. Reading `:more?` off the running constant would
+      ;; call this a clean count of 3.
+      (let [foreign-limit 3
+            pl {:live-metadata {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
+                                                  first :schema_version)}
+                :declared-metadata {}
+                :ops [{:kind :set-not-null
+                       :gates [{:code :not-null
+                                :path [:table "t" :column "b"]
+                                :explanation "column b of table t becomes NOT NULL"
+                                :sql (str "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT " foreign-limit)
+                                :limit foreign-limit}]}]}
+            g (first (:gates (m/check live pl)))]
+        (is (not= foreign-limit lim)
+          "the fixture only tests anything while the planner's limit differs")
+        (is (= foreign-limit (:violations g)))
+        (is (true? (:more? g)) "a saturated sample is \"or more\" at the Gate's own limit")))))
 
 (deftest check-refuses-on-fingerprint-drift
   (with-open [live (sql-jdbc/in-memory)]
@@ -419,7 +455,8 @@
     (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])]
       (p/execute-batch! live ["CREATE TABLE drifted (x INTEGER)"])
       (let [ex (try (m/check live pl) nil (catch Exception e e))]
-        (is (some? ex) "check must throw on fingerprint mismatch")
+        (is (some? ex)
+          "check refuses rather than returning: Gates compiled against a dead schema cannot answer about the live one (ADR 0018)")
         (is (= :drift-refused (:sqlite-migrate/error (ex-data ex))))))))
 
 ;; ---------------------------------------------------------------------------

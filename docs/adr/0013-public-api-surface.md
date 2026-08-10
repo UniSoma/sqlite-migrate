@@ -3,6 +3,8 @@
 > Amended by ADR 0016: `execute-batch!` gains a `gate-sqls` arity and the Frame a gate step.
 >
 > Amended by ADR 0017: `plan` takes both Snapshots positionally, ahead of the Diff.
+>
+> Amended by ADR 0018: the inventory table's Returns column lists success values only; every effectful fn throws on non-success.
 
 The public surface is **four namespaces** (concrete names deferred to
 packaging): a **core** namespace holding the entire pipeline, a **protocol**
@@ -57,6 +59,12 @@ produce a silently polluted declared Snapshot.
 | `drift-report` | `[diff]` | string |
 | `plan-report` | `[plan]` | string |
 | `check-report` | `[check-result]` | string |
+
+The Returns column lists **success values only**: every effectful fn
+signals non-success by throwing `ex-info` carrying the class set of ADR
+0012 — `apply!` on drift, unhandled entries, gate failure, or SQL error;
+`check` on drift; `snapshot` and `declared-snapshot` on introspection
+failure or a non-empty Pristine database (ADRs 0011/0018).
 
 `plan` takes the two Snapshots the Diff was computed from as positional
 arguments (ADR 0017) — they are required planning context, not options — and

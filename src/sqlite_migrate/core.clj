@@ -374,9 +374,11 @@
   "The Check result entry for `gate` (at its op's plan index) given the
   violating `rows` its sampling SELECT returned: the Gate itself under
   `:gate`, `:pass?`, the sampled `:violations` count, `:more?` when the
-  count hit the Gate's baked limit (\"limit or more\"), and the
-  violating `:sample-rows` (row order is SQLite's — outside the
-  determinism contract, ADR 0008)."
+  count hit the Gate's own `:limit` (\"limit or more\" — read from the
+  Gate, never from a constant here, so a Plan compiled under a different
+  limit still reports truthfully: ADR 0019), and the violating
+  `:sample-rows` (row order is SQLite's — outside the determinism
+  contract, ADR 0008)."
   [op-index gate rows]
   (let [n (count rows)]
     {:gate gate
@@ -416,8 +418,11 @@
   the violating `:sample-rows` (row order is SQLite's — outside the
   determinism contract). Refuses (`:drift-refused`, no override) when the
   live `schema_version` fingerprint no longer matches the Plan's
-  source Snapshot provenance. Never mutates the database; SQLite's own
-  enforcement remains the backstop."
+  source Snapshot provenance — advisory means read-only, not
+  never-throws, and Gates compiled against a dead schema cannot answer
+  about the live one (ADR 0018); the refusal takes precedence over any
+  Gate result. Never mutates the database; SQLite's own enforcement
+  remains the backstop."
   [conn plan]
   (verify-fingerprint! conn plan)
   (run-gates conn plan))

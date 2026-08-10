@@ -1,6 +1,10 @@
 # Gates are plan-compiled sampling SELECTs; rebuilds copy by name only
 
 > Amended by ADR 0016: Apply's in-transaction gate check reaches the executor as `gate-sqls` data, not a callback.
+>
+> Amended by ADR 0018: Check refuses (`:drift-refused`) on a stale fingerprint before running a Gate.
+>
+> Amended by ADR 0019: the Gate is five keys — `:limit` carries the baked sample limit — and the Check result's anatomy is fixed there.
 
 A **Gate** is a data precondition carried on an Op: a plain-EDN map with a
 code keyword, the path of the object it guards, a human-readable explanation,

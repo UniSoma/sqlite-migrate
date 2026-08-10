@@ -1,5 +1,7 @@
 # Gate SQL crosses the Executor seam as data; the Frame gains a gate step
 
+> Amended by ADR 0018: "advisory" below means read-only and outside any transaction — `check` does refuse on drift.
+
 Amends ADR 0013 (the `execute-batch!` shape and Frame enumeration) and
 ADR 0008 (how Apply's in-transaction gate check reaches the database).
 
@@ -55,7 +57,8 @@ the three-argument arity. Index-0 rows translate to `:drift-refused`
 and take precedence over any gate rows — gate SQL compiled against a
 dead schema yields answers about a database that no longer exists.
 The early, outside-frame `verify-fingerprint!` stays as the friendly
-fast-fail; `check` is unchanged (advisory, outside any transaction).
+fast-fail; `check` is unchanged (advisory, outside any transaction — which
+means read-only, not never-throws: ADR 0018).
 
 ## Considered Options
 

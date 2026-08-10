@@ -154,7 +154,8 @@ _Avoid_: feature flags, tier, profile
 **Gate**:
 A data precondition carried on an Op whose success depends on the rows it will
 touch (a new NOT NULL, UNIQUE, or STRICT shape): a code, the guarded object's
-path, an explanation, and a plan-compiled SELECT that samples violating rows.
+path, an explanation, and a plan-compiled SELECT that samples violating rows up
+to a limit the Gate carries, so a saturated sample reports "N or more".
 Gates are op metadata, never Refusals — data conformance is undecidable at plan
 time. Codes are an open set — added, never removed or renamed.
 _Avoid_: precondition check, guard, validation
@@ -162,8 +163,11 @@ _Avoid_: precondition check, guard, validation
 **Check**:
 The read-only effectful edge that runs a Plan's Gates verbatim against a
 connection and returns a Check result. Apply runs the same check by default
-before its Ops.
-_Avoid_: dry run, validate, pre-flight (as a name)
+before its Ops. Refuses, with no override, to run against a database whose
+schema has drifted from the Plan's source Snapshot: Gates compiled against a
+schema that no longer exists cannot answer about the one that does.
+_Avoid_: dry run, validate; pre-flight as a name for this surface (describing
+Check as a pre-flight is fine)
 
 **Check result**:
 The plain-EDN value Check returns: pass/fail per Gate, violation counts,

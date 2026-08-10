@@ -539,13 +539,21 @@
 ;; always queries the LIVE table and column spellings — gates run
 ;; before any op does.
 
-(def ^:private gate-sample-limit
+(def gate-sample-limit
   ;; ADR 0008: the LIMIT controls result-set size, not scan cost —
   ;; zero rows pass, k < limit rows fail with the exact count, limit
-  ;; rows fail as "limit or more"
+  ;; rows fail as "limit or more". ADR 0019: the value is not part of
+  ;; the stability promise — any release may change it, which is why
+  ;; every Gate carries it rather than readers assuming it.
   10)
 
-(defn- gate [code path explanation sql]
+(defn- gate
+  "A Gate: `:code`, `:path`, `:explanation`, the sampling `:sql`, and the
+  `:limit` that SQL was baked with — five keys (ADR 0019). Carrying the
+  limit is what lets a Check result computed from a serialized Plan tell
+  \"exactly limit violations\" from \"limit or more\" without assuming the
+  reader's constant matches the compiler's."
+  [code path explanation sql]
   {:code code :path path :explanation explanation :sql sql
    :limit gate-sample-limit})
 

@@ -1,5 +1,9 @@
 # One namespaced error envelope; reports are the only human surface
 
+> Amended by ADR 0018: `:drift-refused` is Check's refusal as well as Apply's.
+>
+> Amended by ADR 0019: the Check result the `:gate-failed` payload carries has a fixed six-key anatomy.
+
 Every `ex-info` the library throws carries **one uniform envelope**: a single
 namespaced discriminator key, `:sqlite-migrate/error`, holding a class
 keyword, plus per-class payload keys. A consumer writes one
@@ -11,7 +15,8 @@ consumers must tolerate unknown classes):
 - `:malformed-input` — bad arguments anywhere (conflicting directives,
   unreadable declaration, invalid opts). Payload: the offending input under a
   descriptive key; nothing further standardized.
-- `:drift-refused` — Apply's `schema_version` fingerprint mismatch. Payload:
+- `:drift-refused` — Apply's or Check's `schema_version` fingerprint mismatch
+  (ADR 0018). Payload:
   the Plan's source fingerprint, the live file's actual fingerprint, and both
   Snapshot-metadata blocks.
 - `:unhandled-refused` — Apply given a Plan with unhandled entries without
