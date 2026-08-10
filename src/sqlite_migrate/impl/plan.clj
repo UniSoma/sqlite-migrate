@@ -79,7 +79,7 @@
   "The column-definition text an :add-column op appends, re-emitted from
   the declared column value's verbatim facts."
   [{:keys [name type not-null? default collate generated]}]
-  (str (u/q-ident name)
+  (str (u/quote-identifier name)
     (when (seq type) (str " " type))
     (when collate (str " COLLATE " collate))
     (when not-null? " NOT NULL")
@@ -178,9 +178,10 @@
 
 (def ^:private order-pad 0)
 
-(defn- op
-  "An op with its plan-position sort key. Order vectors are padded to a
-  fixed length with `order-pad`: `compare` ranks vectors by length
+(defn- ordered-op
+  "An Op paired with its plan-position sort key, under `:op` and
+  `:order`. Order vectors are padded to a fixed length with
+  `order-pad`: `compare` ranks vectors by length
   before content, and the phases emit keys of different arities. The
   -1 sentinels (`sub-rename-table`, `unpatched-position`) intentionally
   sort before the pad."
@@ -221,9 +222,9 @@
                          v-generated "adding a generated column")])))]
     (if blocked
       {:rebuild []}
-      {:ops [(op [phase-change-tables (x/fold-name tname) sub-add-column "" unpatched-position]
+      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-add-column "" unpatched-position]
                :add-column (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (u/q-ident tname) " ADD COLUMN " (column-def-sql col))])]})))
+               [(str "ALTER TABLE " (u/quote-identifier tname) " ADD COLUMN " (column-def-sql col))])]})))
 
 (defn- droppable-in-place?
   "Drop-column legality against the accumulated intermediate state: the
@@ -282,12 +283,12 @@
 (defn- route-changed-column [capabilities tname entry]
   (if (= #{:not-null?} (:facts entry))
     (if (supports? capabilities v-alter-constraint)
-      {:ops [(op [phase-change-tables (x/fold-name tname) sub-alter-column
-                  (x/fold-name (entry-name entry))]
+      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-alter-column
+                          (x/fold-name (entry-name entry))]
                (if (:not-null? (:declared entry)) :set-not-null :drop-not-null)
                (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (u/q-ident tname) " ALTER COLUMN "
-                  (u/q-ident (entry-name entry))
+               [(str "ALTER TABLE " (u/quote-identifier tname) " ALTER COLUMN "
+                  (u/quote-identifier (entry-name entry))
                   (if (:not-null? (:declared entry)) " SET NOT NULL" " DROP NOT NULL"))])]}
       {:rebuild []})
     {:rebuild []}))
@@ -302,19 +303,19 @@
 
 (defn- add-check-op [tname entry]
   (let [c (:declared entry)]
-    (op (into [phase-change-tables (x/fold-name tname) sub-add-check]
-          (check-sort-key c (:path entry)))
+    (ordered-op (into [phase-change-tables (x/fold-name tname) sub-add-check]
+                  (check-sort-key c (:path entry)))
       :add-check (:path entry) #{(:path entry)}
-      [(str "ALTER TABLE " (u/q-ident tname)
-         " ADD " (when (:name c) (str "CONSTRAINT " (u/q-ident (:name c)) " "))
+      [(str "ALTER TABLE " (u/quote-identifier tname)
+         " ADD " (when (:name c) (str "CONSTRAINT " (u/quote-identifier (:name c)) " "))
          "CHECK (" (:expr c) ")")])))
 
 (defn- drop-check-op [tname entry]
   (let [c (:live entry)]
-    (op (into [phase-change-tables (x/fold-name tname) sub-drop-check]
-          (check-sort-key c (:path entry)))
+    (ordered-op (into [phase-change-tables (x/fold-name tname) sub-drop-check]
+                  (check-sort-key c (:path entry)))
       :drop-check (:path entry) #{(:path entry)}
-      [(str "ALTER TABLE " (u/q-ident tname) " DROP CONSTRAINT " (u/q-ident (:name c)))])))
+      [(str "ALTER TABLE " (u/quote-identifier tname) " DROP CONSTRAINT " (u/quote-identifier (:name c)))])))
 
 (defn- route-check [capabilities tname entry]
   (let [gated (supports? capabilities v-alter-constraint)]
@@ -333,14 +334,14 @@
 (defn- drop-secondary-op [sub kind entry parent-fold]
   (let [nm (entry-name entry)
         stmt (case kind
-               :drop-index (str "DROP INDEX " (u/q-ident nm))
-               :drop-trigger (str "DROP TRIGGER " (u/q-ident nm))
-               :drop-view (str "DROP VIEW " (u/q-ident nm)))]
-    (op [phase-drop-secondary sub parent-fold (x/fold-name nm)]
+               :drop-index (str "DROP INDEX " (u/quote-identifier nm))
+               :drop-trigger (str "DROP TRIGGER " (u/quote-identifier nm))
+               :drop-view (str "DROP VIEW " (u/quote-identifier nm)))]
+    (ordered-op [phase-drop-secondary sub parent-fold (x/fold-name nm)]
       kind (:path entry) #{(:path entry)} [stmt])))
 
 (defn- create-secondary-op [sub kind path serves parent-fold nm sql]
-  (op [phase-create-secondary sub parent-fold (x/fold-name nm)] kind path serves [sql]))
+  (ordered-op [phase-create-secondary sub parent-fold (x/fold-name nm)] kind path serves [sql]))
 
 (defn- route-index [entry tname]
   (let [tfold (x/fold-name tname)]
@@ -364,8 +365,18 @@
 
 ;; ---------------------------------------------------------------------------
 ;; The :rebuild-table composite op (ADR 0006, 0008, 0010)
+;;
+;; From here down a `pairing` is one changed table's two sides travelling
+;; together: `{:live-table :declared-table :rename-map}` — the live table,
+;; its declared counterpart, and the resolved :rename-column claims linking
+;; their columns (declared fold → live column name, ADR 0009). Fusion
+;; resolves the :rename-map; every rebuild and gate reads the whole thing.
 
-(defn- q-str ^String [^String s]
+(defn- quote-string-literal
+  "Quote `s` as a SQL string literal — single quotes, embedded single
+  quotes doubled per SQLite quoting rules. Not an identifier quoter;
+  that is `sqlite-migrate.impl.util/quote-identifier`."
+  ^String [^String s]
   (str "'" (str/replace s "'" "''") "'"))
 
 (defn- temp-rebuild-name
@@ -396,7 +407,7 @@
                                 (not (contains? #{"if" "not" "exists"} (:fold %))))
                           %)
                    (drop after-table toks))]
-    (str (subs sql 0 (:s name-tok)) (u/q-ident temp-name) (subs sql (:e name-tok)))))
+    (str (subs sql 0 (:s name-tok)) (u/quote-identifier temp-name) (subs sql (:e name-tok)))))
 
 (defn- rowid-alias-fold
   "The folded name of `table`'s INTEGER PRIMARY KEY column — the rowid
@@ -412,12 +423,12 @@
   "The rebuild's INSERT...SELECT — column mapping strictly by name (ADR
   0008): declared non-generated columns that also exist live, in
   declared order; new columns take their declared defaults by omission;
-  dropped columns are not copied. `renames` maps a declared column's
-  folded name to the live column a rename directive binds it to (ADR
+  dropped columns are not copied. The pairing's `:rename-map` binds a
+  declared column's folded name to the live column it renames (ADR
   0009) — the copy follows the rename. `rowid` copies explicitly when
   both sides are rowid tables and no copied INTEGER PRIMARY KEY column
   already aliases it (ADR 0010). Nil when nothing is copyable."
-  [temp-name live-table declared-table renames]
+  [temp-name {:keys [live-table declared-table] renames :rename-map}]
   (let [live-name-by-fold (into {} (map (fn [c] [(x/fold-name (:name c)) (:name c)]))
                             (:columns live-table))
         live-of (fn [c] (let [f (x/fold-name (:name c))]
@@ -429,12 +440,12 @@
                  (not (:without-rowid? declared-table))
                  (not (and alias-fold
                         (some #(= alias-fold (x/fold-name (:name %))) shared))))
-        insert-cols (concat (when rowid? ["rowid"]) (map (comp u/q-ident :name) shared))
-        select-cols (concat (when rowid? ["rowid"]) (map (comp u/q-ident live-of) shared))]
+        insert-cols (concat (when rowid? ["rowid"]) (map (comp u/quote-identifier :name) shared))
+        select-cols (concat (when rowid? ["rowid"]) (map (comp u/quote-identifier live-of) shared))]
     (when (seq insert-cols)
-      (str "INSERT INTO " (u/q-ident temp-name) " (" (str/join ", " insert-cols)
+      (str "INSERT INTO " (u/quote-identifier temp-name) " (" (str/join ", " insert-cols)
         ") SELECT " (str/join ", " select-cols)
-        " FROM " (u/q-ident (:name live-table))))))
+        " FROM " (u/quote-identifier (:name live-table))))))
 
 (defn- sequence-restore-sqls
   "The statements restoring the AUTOINCREMENT counter (ADR 0010): lift
@@ -444,8 +455,8 @@
   to the copied maximum; these statements only raise it to the live
   counter when that is higher (or plant it when the copy was empty)."
   [temp-name live-name]
-  (let [live (q-str live-name)
-        temp (q-str temp-name)]
+  (let [live (quote-string-literal live-name)
+        temp (quote-string-literal temp-name)]
     [(str "UPDATE sqlite_sequence SET seq = (SELECT s.seq FROM sqlite_sequence AS s"
        " WHERE s.name = " live ") WHERE name = " temp
        " AND seq < (SELECT s.seq FROM sqlite_sequence AS s WHERE s.name = " live ")")
@@ -480,10 +491,10 @@
   "The rebuild's staging statements: create the declared shape under
   `temp`, INSERT...SELECT copy, and — when both sides autoincrement —
   restore the AUTOINCREMENT counter."
-  [temp live-table declared-table renames]
+  [temp {:keys [live-table declared-table] :as pairing}]
   (let [autoincrement? (and (:autoincrement? live-table) (:autoincrement? declared-table))]
     (-> [(create-sql-under-temp-name (:sql (meta declared-table)) temp)]
-      (into (keep identity [(rebuild-copy-sql temp live-table declared-table renames)]))
+      (into (keep identity [(rebuild-copy-sql temp pairing)]))
       (into (when autoincrement?
               (sequence-restore-sqls temp (:name live-table)))))))
 
@@ -491,13 +502,13 @@
   "The rebuild's swap statements: drop the dependents that would break
   the rename, drop the old table, rename the staged table into place —
   never rename-first."
-  [temp live-table declared-table deps]
+  [temp {:keys [live-table declared-table]} deps]
   (-> []
-    (into (map #(str "DROP VIEW " (u/q-ident (:name %)))) (:views deps))
-    (into (map #(str "DROP TRIGGER " (u/q-ident (:name %)))) (:triggers deps))
-    (conj (str "DROP TABLE " (u/q-ident (:name live-table))))
-    (conj (str "ALTER TABLE " (u/q-ident temp)
-            " RENAME TO " (u/q-ident (:name declared-table))))))
+    (into (map #(str "DROP VIEW " (u/quote-identifier (:name %)))) (:views deps))
+    (into (map #(str "DROP TRIGGER " (u/quote-identifier (:name %)))) (:triggers deps))
+    (conj (str "DROP TABLE " (u/quote-identifier (:name live-table))))
+    (conj (str "ALTER TABLE " (u/quote-identifier temp)
+            " RENAME TO " (u/quote-identifier (:name declared-table))))))
 
 (defn- rebuild-recreate-sqls
   "The rebuild's recreate statements: the declared table's indexes and
@@ -522,14 +533,14 @@
   rename, drop the old table, rename the new one into place — never
   rename-first — then recreate the declared indexes and triggers and
   the dropped dependents."
-  [pctx tname serves live-table declared-table renames]
+  [planning-context tname serves {:keys [declared-table] :as pairing}]
   (let [tfold (x/fold-name tname)
-        temp (temp-rebuild-name pctx (:name declared-table))
-        deps (rebuild-dependents (:surviving-dependents pctx) tfold)
-        sql (-> (rebuild-stage-sqls temp live-table declared-table renames)
-              (into (rebuild-swap-sqls temp live-table declared-table deps))
+        temp (temp-rebuild-name planning-context (:name declared-table))
+        deps (rebuild-dependents (:surviving-dependents planning-context) tfold)
+        sql (-> (rebuild-stage-sqls temp pairing)
+              (into (rebuild-swap-sqls temp pairing deps))
               (into (rebuild-recreate-sqls declared-table deps)))]
-    (op [phase-change-tables tfold] :rebuild-table [:table tname] serves sql)))
+    (ordered-op [phase-change-tables tfold] :rebuild-table [:table tname] serves sql)))
 
 ;; ---------------------------------------------------------------------------
 ;; Gates (ADR 0008): data preconditions as plan-compiled sampling
@@ -561,7 +572,7 @@
   "The sampling SELECT over the live table: violating rows under
   `condition` (nil = every row violates), with the baked LIMIT."
   [live-tname condition]
-  (str "SELECT * FROM " (u/q-ident live-tname)
+  (str "SELECT * FROM " (u/quote-identifier live-tname)
     (when condition (str " WHERE " condition))
     " LIMIT " gate-sample-limit))
 
@@ -608,10 +619,10 @@
   collide nor dangle; nil when a new column's default is an opaque
   expression — undecidable at plan time, the documented gate exclusion
   (ADR 0015, the Frame remains the backstop)."
-  [gctx declared-name]
-  (if-let [lc (live-col-name gctx declared-name)]
+  [pairing declared-name]
+  (if-let [lc (live-col-name pairing declared-name)]
     [:live lc]
-    (let [d (:default (declared-column gctx declared-name))]
+    (let [d (:default (declared-column pairing declared-name))]
       (case (default-kind d)
         :constant [:const (str "(" (str/trim d) ")")]
         :null :null
@@ -621,7 +632,7 @@
   "The bare SQL fragment of a `key-part` pair: the quoted live column,
   or the constant fragment verbatim."
   [[k v]]
-  (if (= :live k) (u/q-ident v) v))
+  (if (= :live k) (u/quote-identifier v) v))
 
 (defn- positional-group-const?
   "True when a :const key part's fragment is an integer literal —
@@ -676,14 +687,14 @@
   row. `where` is a partial index's verbatim predicate."
   [live-tname parts where]
   (str "SELECT " (str/join ", " (map :select parts)) ", COUNT(*) AS \"sqm_count\""
-    " FROM " (u/q-ident live-tname)
+    " FROM " (u/quote-identifier live-tname)
     " WHERE " (when where (str "(" where ") AND "))
     (str/join " AND " (map #(str (:bare %) " IS NOT NULL") parts))
     " GROUP BY " (group-by-list parts)
     " HAVING COUNT(*) > 1 LIMIT " gate-sample-limit))
 
-(defn- column-gates [gctx entry]
-  (let [t (:name (:live-table gctx))]
+(defn- column-gates [pairing entry]
+  (let [t (:name (:live-table pairing))]
     (case (:kind entry)
       :changed
       (when (and (contains? (:facts entry) :not-null?)
@@ -693,7 +704,7 @@
           [(gate :not-null (:path entry)
              (str "column " c " of table " t " becomes NOT NULL;"
                " a stored NULL there would be rejected")
-             (sampling-sql t (str (u/q-ident c) " IS NULL")))]))
+             (sampling-sql t (str (u/quote-identifier c) " IS NULL")))]))
       :added
       ;; an explicit DEFAULT NULL is no default here — SQLite rejects
       ;; the addition exactly like the bare NOT NULL once rows exist;
@@ -706,15 +717,15 @@
              (sampling-sql t nil))]))
       nil)))
 
-(defn- check-constraint-gates [gctx entry]
+(defn- check-constraint-gates [pairing route entry]
   (when (contains? #{:added :changed} (:kind entry))
-    (let [t (:name (:live-table gctx))
+    (let [t (:name (:live-table pairing))
           expr (:expr (:declared entry))]
       ;; the routes verify differently (measured on 3.53): in-place
       ;; ALTER TABLE ADD CHECK validation rejects rows where the
       ;; expression is NULL, while the rebuild's INSERT copy applies
       ;; insert-time CHECK semantics — NULL passes
-      (if (:alter-validation? gctx)
+      (if (= :in-place route)
         [(gate :check (:path entry)
            (str "table " t " adds CHECK (" expr ");"
              " rows where the expression is false or NULL would be rejected")
@@ -724,13 +735,13 @@
              " rows where the expression is false would be rejected")
            (sampling-sql t (str "NOT (" expr ")")))]))))
 
-(defn- index-gates [gctx entry]
+(defn- index-gates [pairing entry]
   (when (and (contains? #{:added :changed} (:kind entry))
           (:unique? (:declared entry)))
-    (let [t (:name (:live-table gctx))
+    (let [t (:name (:live-table pairing))
           idx (:declared entry)
           key-parts (mapv (fn [{:keys [name expr]}]
-                            (if name (key-part gctx name) [:expr (str "(" expr ")")]))
+                            (if name (key-part pairing name) [:expr (str "(" expr ")")]))
                       (:columns idx))]
       (when (gateable-key-parts? key-parts)
         (let [parts (mapv (fn [{:keys [collate]} kp]
@@ -745,17 +756,16 @@
                (const-part-note (mapv :name (:columns idx)) key-parts))
              (key-group-sql t parts (:where idx)))])))))
 
-(defn- foreign-key-gates [gctx entry]
+(defn- foreign-key-gates [{:keys [live-snapshot declared-snapshot]} pairing entry]
   ;; ADR 0008: carried even though the Frame's foreign_key_check would
   ;; catch orphans at COMMIT — the gate reports before any work runs.
   ;; Action/match/deferrability changes carry no row precondition.
   (when (or (= :added (:kind entry))
           (and (= :changed (:kind entry))
             (some (:facts entry) [:columns :ref-table :ref-columns])))
-    (let [{:keys [live-table live-snapshot declared-snapshot]} gctx
-          t (:name live-table)
+    (let [t (:name (:live-table pairing))
           fk (:declared entry)
-          key-parts (mapv #(key-part gctx %) (:columns fk))
+          key-parts (mapv #(key-part pairing %) (:columns fk))
           parent-fold (x/fold-name (:ref-table fk))
           find-parent (fn [snap]
                         (some (fn [[k v]] (when (= parent-fold (x/fold-name k)) v))
@@ -771,16 +781,16 @@
               (= (count ref-cols) (count key-parts)))
         (let [not-nulls (str/join " AND "
                           (keep (fn [[k v]] (when (= :live k)
-                                              (str (u/q-ident v) " IS NOT NULL")))
+                                              (str (u/quote-identifier v) " IS NOT NULL")))
                             key-parts))
               lookup (when parent-live
-                       (str "NOT EXISTS (SELECT 1 FROM " (u/q-ident (:name parent-live))
+                       (str "NOT EXISTS (SELECT 1 FROM " (u/quote-identifier (:name parent-live))
                          " AS \"sqm_parent\" WHERE "
                          (str/join " AND "
                            (map (fn [rc [k :as kp]]
-                                  (str "\"sqm_parent\"." (u/q-ident rc) " = "
+                                  (str "\"sqm_parent\"." (u/quote-identifier rc) " = "
                                     (if (= :live k)
-                                      (str (u/q-ident t) "." (key-part-sql kp))
+                                      (str (u/quote-identifier t) "." (key-part-sql kp))
                                       (key-part-sql kp))))
                              ref-cols key-parts))
                          ")"))
@@ -877,16 +887,16 @@
   gated only where SQLite rejects them — WITHOUT ROWID or STRICT
   shapes without an INTEGER PRIMARY KEY alias; a plain rowid table
   tolerates NULL PK values (legacy quirk) and an alias auto-assigns."
-  [gctx {:keys [kind facts] :as entry}]
+  [pairing {:keys [kind facts] :as entry}]
   (when (= :changed kind)
-    (let [{:keys [live-table declared-table]} gctx
+    (let [{:keys [live-table declared-table]} pairing
           t (:name live-table)
           pk-cols (get-in declared-table [:primary-key :columns])
           alias? (some? (rowid-alias-fold declared-table))]
       (vec
         (concat
           (when (and (contains? facts :primary-key) (seq pk-cols))
-            (let [key-parts (mapv #(key-part gctx %) pk-cols)]
+            (let [key-parts (mapv #(key-part pairing %) pk-cols)]
               ;; a new NULL-defaulted PK column never collides: a plain
               ;; rowid table stores the NULLs as distinct keys (legacy
               ;; quirk) and STRICT / WITHOUT ROWID shapes mark the
@@ -899,13 +909,13 @@
                       key-list (str/join ", " qs)
                       row (if (= 1 (count qs)) (first qs) (str "(" key-list ")"))
                       live-qs (into [] (comp (filter (comp #{:live} first))
-                                         (map (comp u/q-ident second)))
+                                         (map (comp u/quote-identifier second)))
                                 key-parts)
                       null-enforced? (and (not alias?) (seq live-qs)
                                        (or (:without-rowid? declared-table)
                                          (:strict? declared-table)))
                       group-list (group-by-list (map key-part-fragments key-parts))
-                      dup (str row " IN (SELECT " key-list " FROM " (u/q-ident t)
+                      dup (str row " IN (SELECT " key-list " FROM " (u/quote-identifier t)
                             " WHERE " (str/join " AND " (map #(str % " IS NOT NULL") qs))
                             " GROUP BY " group-list " HAVING COUNT(*) > 1)")]
                   [(gate :primary-key (:path entry)
@@ -919,8 +929,8 @@
           (when (and (contains? facts :strict?) (:strict? declared-table))
             (let [conds (keep (fn [dc]
                                 (when (nil? (:generated dc))
-                                  (when-let [lc (live-col-name gctx (:name dc))]
-                                    (strict-violation-condition (u/q-ident lc)
+                                  (when-let [lc (live-col-name pairing (:name dc))]
+                                    (strict-violation-condition (u/quote-identifier lc)
                                       (some-> (:type dc) x/fold-name)))))
                           (:columns declared-table))]
               (when (seq conds)
@@ -930,13 +940,13 @@
                    (sampling-sql t (str/join " OR " conds)))])))
           (when (and (contains? facts :without-rowid?) (:without-rowid? declared-table))
             (let [parts (reduce (fn [acc n]
-                                  (if-let [lc (live-col-name gctx n)]
-                                    (conj acc (str (u/q-ident lc) " IS NULL"))
+                                  (if-let [lc (live-col-name pairing n)]
+                                    (conj acc (str (u/quote-identifier lc) " IS NULL"))
                                     ;; a new PK column defaulting to NULL leaves
                                     ;; every copied row NULL there; a constant
                                     ;; or opaque default fills it (ADR 0015)
                                     (if (= :null (default-kind
-                                                   (:default (declared-column gctx n))))
+                                                   (:default (declared-column pairing n))))
                                       (reduced :all)
                                       acc)))
                           [] pk-cols)
@@ -948,11 +958,11 @@
                 (seq parts) [(gate :without-rowid (:path entry) explanation
                                (sampling-sql t (str/join " OR " parts)))]))))))))
 
-(defn- unique-gates [gctx entry]
+(defn- unique-gates [pairing entry]
   (when (contains? #{:added :changed} (:kind entry))
-    (let [t (:name (:live-table gctx))
+    (let [t (:name (:live-table pairing))
           cols (:columns (:declared entry))
-          key-parts (mapv #(key-part gctx %) cols)]
+          key-parts (mapv #(key-part pairing %) cols)]
       (when (gateable-key-parts? key-parts)
         [(gate :unique (:path entry)
            (str "unique key (" (str/join ", " cols) ") of table " t ";"
@@ -962,17 +972,20 @@
 
 (defn- entry-gates
   "The Gates one routed unit's entry contributes, compiled from the
-  gate context (live and declared table values, the resolved rename
-  map, and both Snapshots)."
-  [gctx {:keys [path] :as entry}]
+  `pairing` (live and declared table values plus the resolved rename
+  map) and, for a foreign key's parent lookup, the planning context's
+  two Snapshots. `route` is `:in-place` or `:rebuild` — the route the
+  unit took. A CHECK gate on the `:in-place` route must replicate ALTER
+  TABLE ADD CHECK's NULL handling rather than the rebuild copy's."
+  [planning-context pairing route {:keys [path] :as entry}]
   (let [seg (when (> (count path) 2) (nth path 2))]
     (cond
-      (= 2 (count path)) (table-gates gctx entry)
-      (= :column seg) (column-gates gctx entry)
-      (= :check seg) (check-constraint-gates gctx entry)
-      (= :unique seg) (unique-gates gctx entry)
-      (= :foreign-key seg) (foreign-key-gates gctx entry)
-      (= :index seg) (index-gates gctx entry)
+      (= 2 (count path)) (table-gates pairing entry)
+      (= :column seg) (column-gates pairing entry)
+      (= :check seg) (check-constraint-gates pairing route entry)
+      (= :unique seg) (unique-gates pairing entry)
+      (= :foreign-key seg) (foreign-key-gates planning-context pairing entry)
+      (= :index seg) (index-gates pairing entry)
       :else nil)))
 
 (def ^:private gate-carrying-kinds
@@ -1028,28 +1041,29 @@
 (defn- route-renamed-column
   "Route one fused column-rename entry (ADR 0009): a changed column
   whose sides differ in name. Name-only fuses to an in-place RENAME
-  COLUMN; any other differing fact, a colliding rename set (ctx
-  `:rename-collision?` — sequential in-place steps would collide), or
-  a pre-3.25 target collapses it onto the rebuild path."
-  [capabilities tname ctx entry]
+  COLUMN; any other differing fact, a colliding rename set (the
+  routing state's `:rename-collision?` — sequential in-place steps
+  would collide), or a pre-3.25 target collapses it onto the rebuild
+  path."
+  [capabilities tname routing-state entry]
   (let [{:keys [from to]} (:rename entry)]
     (if (or (seq (:facts entry))
-          (:rename-collision? ctx)
+          (:rename-collision? routing-state)
           (not (supports? capabilities v-rename-column)))
       {:rebuild []}
-      {:ops [(op [phase-change-tables (x/fold-name tname) sub-alter-column (x/fold-name from)]
+      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-alter-column (x/fold-name from)]
                :rename-column (:path entry) #{(:path entry)}
-               [(str "ALTER TABLE " (u/q-ident tname) " RENAME COLUMN "
-                  (u/q-ident from) " TO " (u/q-ident to))])]})))
+               [(str "ALTER TABLE " (u/quote-identifier tname) " RENAME COLUMN "
+                  (u/quote-identifier from) " TO " (u/quote-identifier to))])]})))
 
 (defn- route-table-entry
-  "Route one entry of a changed regular table. `ctx` carries the live
-  and declared table values plus the sets the intermediate-state checks
-  need."
-  [capabilities tname ctx entry]
+  "Route one entry of a changed regular table. `pairing` carries the
+  live and declared table values; `routing-state` carries the sets the
+  intermediate-state checks need."
+  [capabilities tname pairing routing-state entry]
   (let [seg (when (> (count (:path entry)) 2) (nth (:path entry) 2))]
     (cond
-      (:rename entry) (route-renamed-column capabilities tname ctx entry)
+      (:rename entry) (route-renamed-column capabilities tname routing-state entry)
 
       (= 2 (count (:path entry))) ; table-level facts: STRICT, WITHOUT ROWID, order, PK, AUTOINCREMENT
       {:rebuild (unsupported-object-refusals capabilities (:declared entry))}
@@ -1059,26 +1073,26 @@
         :added (let [unsupported (unsupported-object-refusals capabilities (:declared entry))]
                  (if (seq unsupported)
                    {:refuse unsupported}
-                   (route-added-column capabilities tname entry (:appendable? ctx))))
+                   (route-added-column capabilities tname entry (:appendable? routing-state))))
         :removed
         (let [col (:live entry)
               col-fold (x/fold-name (:name col))
               in-place? (and (supports? capabilities v-drop-column)
-                          (droppable-in-place? tname (:live-table ctx) col-fold ctx))
+                          (droppable-in-place? tname (:live-table pairing) col-fold routing-state))
               ;; an authorized drop is intent supplied (ADR 0009):
               ;; the :destructive-drop refusal is lifted, the route
               ;; stands on its own merits
               destructive? (and (not= :virtual (get-in col [:generated :storage]))
-                             (not (contains? (:authorized-col-drops ctx) col-fold)))]
+                             (not (contains? (:authorized-col-drops routing-state) col-fold)))]
           (cond
             (not in-place?) {:rebuild (when destructive?
                                         [(destructive-refusal (entry-what entry))])}
             destructive? {:needs-intent [(destructive-refusal (entry-what entry))]}
-            :else {:ops [(op [phase-change-tables (x/fold-name tname) sub-drop-column
-                              (get (:drop-order ctx) col-fold)]
+            :else {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-drop-column
+                                      (get (:drop-order routing-state) col-fold)]
                            :drop-column (:path entry) #{(:path entry)}
-                           [(str "ALTER TABLE " (u/q-ident tname)
-                              " DROP COLUMN " (u/q-ident (:name col)))])]}))
+                           [(str "ALTER TABLE " (u/quote-identifier tname)
+                              " DROP COLUMN " (u/quote-identifier (:name col)))])]}))
         :changed (route-changed-column capabilities tname entry))
 
       (= :check seg) (route-check capabilities tname entry)
@@ -1087,12 +1101,12 @@
       ;; :unique and :foreign-key constraints have no in-place ALTER form
       :else {:rebuild []})))
 
-(defn- changed-table-ctx
-  "The intermediate-state context for routing a changed table's entries:
+(defn- table-routing-state
+  "The intermediate state routing a changed table's entries reads:
   which indexes and checks survive the plan's earlier drops, which
   columns are being dropped (and in what order), and whether the added
   columns form a declared-order suffix."
-  [capabilities entries live-table declared-table]
+  [capabilities entries {:keys [live-table declared-table]}]
   (let [seg-of (fn [e] (when (> (count (:path e)) 2) (nth (:path e) 2)))
         dropped-index-folds (into #{}
                               (comp (filter #(and (= :index (seg-of %))
@@ -1118,8 +1132,7 @@
         drop-order (zipmap (map (comp x/fold-name :name)
                              (order-dropped-columns removed-cols))
                      (range))]
-    {:live-table live-table
-     :appendable? (appended-suffix? declared-table added-folds)
+    {:appendable? (appended-suffix? declared-table added-folds)
      :retained-indexes (vec (for [[nm idx] (sort-by key (:indexes live-table))
                                   :when (not (contains? dropped-index-folds (x/fold-name nm)))]
                               idx))
@@ -1188,9 +1201,9 @@
   phase-3 op of the fused table, so later in-place ops target the
   declared name."
   [live-name declared-name serves]
-  (op [phase-change-tables (x/fold-name declared-name) sub-rename-table]
+  (ordered-op [phase-change-tables (x/fold-name declared-name) sub-rename-table]
     :rename-table [:table live-name] serves
-    [(str "ALTER TABLE " (u/q-ident live-name) " RENAME TO " (u/q-ident declared-name))]))
+    [(str "ALTER TABLE " (u/quote-identifier live-name) " RENAME TO " (u/quote-identifier declared-name))]))
 
 (defn- active-column-renames
   "The subset of one table's :rename-column claims that resolve
@@ -1217,6 +1230,91 @@
           pruned (filterv keep? active)]
       (if (= pruned active) active (recur pruned)))))
 
+(defn- column-entry?
+  "True when `entry` names a column of a table — a path of the shape
+  `[:table t :column c]`."
+  [entry]
+  (and (= 4 (count (:path entry))) (= :column (nth (:path entry) 2))))
+
+(defn- entry-column-fold
+  "The folded column name a column entry's path ends in, folded exactly
+  as the Equivalence relation folds identifiers (ADR 0009)."
+  [entry]
+  (x/fold-name (peek (:path entry))))
+
+(defn- columns-by-fold
+  "`table`'s columns indexed by folded name."
+  [table]
+  (into {} (map (fn [c] [(x/fold-name (:name c)) c])) (:columns table)))
+
+(defn- column-folds
+  "The folded names of `table`'s columns."
+  [table]
+  (into #{} (map (comp x/fold-name :name)) (:columns table)))
+
+(defn- rename-candidates
+  "One table's :rename-column claims normalized for resolution: each
+  directive paired with its folded live `from` and declared `to`."
+  [rename-claims]
+  (mapv (fn [dv] {:directive dv
+                  :from-fold (x/fold-name (:from dv))
+                  :to-fold (x/fold-name (:to dv))})
+    rename-claims))
+
+(defn- entry-subject-folds
+  "The folded column names the column entries of `entries` whose kind is
+  in `kinds` name."
+  [entries kinds]
+  (into #{} (comp (filter column-entry?)
+              (filter (comp kinds :kind))
+              (map entry-column-fold))
+    entries))
+
+(defn- anchored-renames
+  "The active renames the change set anchors. An identity-paired table
+  keeps a rename only while one of its two columns is a subject of
+  `entries`, so a directive never plans against a drift the Diff does
+  not show (ADR 0009)."
+  [entries active]
+  (let [live-subjects (entry-subject-folds entries #{:removed :changed})
+        declared-subjects (entry-subject-folds entries #{:added :changed})]
+    (filterv #(or (contains? live-subjects (:from-fold %))
+                (contains? declared-subjects (:to-fold %)))
+      active)))
+
+(defn- rename-claims-entry?
+  "True when the resolved `rename` claims `entry`: a column entry naming
+  the rename's live `from` side when :removed, its declared `to` side
+  when :added, or either when :changed."
+  [{:keys [from-fold to-fold]} entry]
+  (and (column-entry? entry)
+    (let [f (entry-column-fold entry)
+          kind (:kind entry)]
+      (or (and (#{:removed :changed} kind) (= f from-fold))
+        (and (#{:added :changed} kind) (= f to-fold))))))
+
+(defn- rename-consumed?
+  "True when one of the resolved `renames` claims `entry` — the entry is
+  fused away into that rename's synthetic unit."
+  [renames entry]
+  (boolean (some #(rename-claims-entry? % entry) renames)))
+
+(defn- rename-unit
+  "One resolved rename's synthetic unit: a single :changed entry whose
+  live and declared sides differ in name (`:rename {:from :to}`, facts
+  compared name-blind), paired under `:orig` with the entries of
+  `entries` it consumes."
+  [tname entries lcols dcols {:keys [from-fold to-fold] :as rename}]
+  (let [lc (lcols from-fold)
+        dc (dcols to-fold)]
+    {:entry {:kind :changed
+             :path [:table tname :column (:name lc)]
+             :live lc
+             :declared dc
+             :facts (not-empty (d/fused-column-facts lc dc))
+             :rename {:from (:name lc) :to (:name dc)}}
+     :orig (filterv #(rename-claims-entry? rename %) entries)}))
+
 (defn- fuse-column-entries
   "Fuse one table's column entries under its resolved :rename-column
   claims (ADR 0009). The entries a rename claims — its live `from`
@@ -1227,68 +1325,193 @@
   tables) keeps a rename inert unless some entry involves one of its
   columns, so a directive never plans against a drift the Diff does
   not show. Returns `{:units [{:entry e :orig [entries]}]
-  :rename-directives [...] :rename-map {declared-fold live-name}
-  :collision? bool}` — `:collision?` when a rename target is still a
-  live column name, forcing the rebuild path (swaps, chains)."
-  [tname entries live-table declared-table claims require-anchor?]
-  (let [col-entry? (fn [e] (and (= 4 (count (:path e))) (= :column (nth (:path e) 2))))
-        efold (fn [e] (x/fold-name (peek (:path e))))
-        col-folds (fn [t] (into #{} (map (comp x/fold-name :name)) (:columns t)))
-        live-folds (col-folds live-table)
-        declared-folds (col-folds declared-table)
-        normalized (mapv (fn [dv] {:directive dv
-                                   :from-fold (x/fold-name (:from dv))
-                                   :to-fold (x/fold-name (:to dv))})
-                     claims)
-        active (active-column-renames normalized live-folds declared-folds)
-        effective (if require-anchor?
-                    (let [live-subjects (into #{} (comp (filter col-entry?)
-                                                    (filter #(#{:removed :changed} (:kind %)))
-                                                    (map efold))
-                                          entries)
-                          declared-subjects (into #{} (comp (filter col-entry?)
-                                                        (filter #(#{:added :changed} (:kind %)))
-                                                        (map efold))
-                                              entries)]
-                      (filterv #(or (contains? live-subjects (:from-fold %))
-                                  (contains? declared-subjects (:to-fold %)))
-                        active))
-                    active)
-        sources (into #{} (map :from-fold) effective)
-        targets (into #{} (map :to-fold) effective)
-        consumed? (fn [e]
-                    (and (col-entry? e)
-                      (let [f (efold e)]
-                        (case (:kind e)
-                          :removed (contains? sources f)
-                          :added (contains? targets f)
-                          :changed (or (contains? sources f) (contains? targets f))))))
-        col-of (fn [t] (into {} (map (fn [c] [(x/fold-name (:name c)) c])) (:columns t)))
-        lcols (col-of live-table)
-        dcols (col-of declared-table)
-        synthetic (mapv (fn [{:keys [from-fold to-fold]}]
-                          (let [lc (lcols from-fold)
-                                dc (dcols to-fold)]
-                            {:entry {:kind :changed
-                                     :path [:table tname :column (:name lc)]
-                                     :live lc
-                                     :declared dc
-                                     :facts (not-empty (d/fused-column-facts lc dc))
-                                     :rename {:from (:name lc) :to (:name dc)}}
-                             :orig (filterv (fn [e]
-                                              (and (consumed? e)
-                                                (let [f (efold e)]
-                                                  (or (and (#{:removed :changed} (:kind e)) (= f from-fold))
-                                                    (and (#{:added :changed} (:kind e)) (= f to-fold))))))
-                                     entries)}))
-                    effective)]
-    {:units (into (into [] (comp (remove consumed?) (map (fn [e] {:entry e :orig [e]}))) entries)
-              synthetic)
+  :rename-directives [...] :pairing p :collision? bool}` — `:pairing`
+  is the given pair completed with the `:rename-map` fusion resolved
+  (declared fold → live column name), and `:collision?` says a rename
+  target is still a live column name, forcing the rebuild path (swaps,
+  chains)."
+  [tname entries {:keys [live-table declared-table] :as pairing} rename-claims require-anchor?]
+  (let [live-folds (column-folds live-table)
+        active (active-column-renames (rename-candidates rename-claims)
+                 live-folds (column-folds declared-table))
+        effective (if require-anchor? (anchored-renames entries active) active)
+        lcols (columns-by-fold live-table)
+        dcols (columns-by-fold declared-table)]
+    {:units (into (into [] (comp (remove #(rename-consumed? effective %))
+                             (map (fn [e] {:entry e :orig [e]})))
+                    entries)
+              (map #(rename-unit tname entries lcols dcols %))
+              effective)
      :rename-directives (mapv :directive effective)
-     :rename-map (into {} (map (fn [{:keys [from-fold to-fold]}]
-                                 [to-fold (:name (lcols from-fold))]))
-                   effective)
+     :pairing (assoc pairing :rename-map
+                (into {} (map (fn [{:keys [from-fold to-fold]}]
+                                [to-fold (:name (lcols from-fold))]))
+                  effective))
      :collision? (boolean (some #(contains? live-folds (:to-fold %)) effective))}))
+
+(defn- fused-serves
+  "The two whole-table entry paths every op of a fused pair serves (ADR
+  0009), or nil for an identity-paired table."
+  [fused]
+  (when fused #{(:path (:removed fused)) (:path (:added fused))}))
+
+(defn- unit-serves
+  "The entry paths one unit's ops serve: a fused pair's two whole-table
+  paths, otherwise the paths of the entries the unit fused. Not a
+  delegation to `fused-serves` — a fused pair answers for its two
+  whole-table entries and nothing else (ADR 0009), so the unit's own
+  entries are read only where there is no pair to answer for them.
+  Callers serving a whole change set rather than one unit go to
+  `fused-serves` direct, since no single unit's `:orig` covers them."
+  [fused unit]
+  (or (fused-serves fused) (into #{} (map :path) (:orig unit))))
+
+(defn- unit-refusals
+  "`refusals` keyed by the entries they answer for — a fused pair's
+  refusals ride on both whole-table entries (ADR 0009), otherwise on
+  every entry the unit fused."
+  [fused unit refusals]
+  (let [rs (vec refusals)]
+    (if fused
+      {(:removed fused) rs (:added fused) rs}
+      (zipmap (:orig unit) (repeat rs)))))
+
+(defn- merge-refusals
+  "Merge per-unit `{entry [refusals]}` maps into one, an entry's
+  refusals concatenated in unit order with duplicates dropped."
+  [maps]
+  (apply merge-with (fn [a b] (vec (distinct (concat a b)))) {} maps))
+
+(defn- removed-column-folds
+  "The folded names of the columns `units` drop outright."
+  [units]
+  (into #{} (comp (map :entry)
+              (filter #(and (column-entry? %) (= :removed (:kind %))))
+              (map entry-column-fold))
+    units))
+
+(defn- used-directives
+  "The directives planning one table consumed (ADR 0009): the matched
+  :rename-table, every :rename-column that fused, and each authorized
+  :drop-column whose column the change set actually drops."
+  [fused rename-directives authorized removed-folds]
+  (-> (vec (when fused [(:directive fused)]))
+    (into rename-directives)
+    (into (keep (fn [[f dv]] (when (contains? removed-folds f) dv)))
+      authorized)))
+
+;; ---------------------------------------------------------------------------
+;; Change set: one table's whole pending change, carried as a single
+;; value from fusion through routing and ADR 0006's selection rule.
+;;   :tname    the declared table name the change plans toward
+;;   :pairing  the live table paired with its declared counterpart, its
+;;             :rename-map resolved by fusion
+;;   :fused    the matched :rename-table pair — its directive and the
+;;             removed and added whole-table entries (ADR 0009) — or nil
+;;             for an identity-paired table
+;;   :entries  the table's Diff entries, as the Diff reported them
+;;   :units    those entries fused under the resolved :rename-column
+;;             claims, each `{:entry e :orig [entries]}`
+;;   :collision?  whether a rename target collides with a live column name
+;;   :authorized  the :drop-column claims authorizing this table's drops,
+;;             by folded column name
+;;   :routed   :units with every unit's `:route` attached, present only
+;;             after `attach-routes`
+;; `capabilities` and `planning-context` stay separate parameters: they
+;; are ambient planner context, not part of any one table's change set.
+
+(defn- attach-routes
+  "`change-set` with `:routed` attached — every unit carrying its
+  `:route`. Routing reads the table's own routing state widened with
+  what phase-1 leaves standing, whether a rename target collides with a
+  live column name, and the columns a :drop-column claim authorizes
+  dropping."
+  [capabilities planning-context
+   {:keys [tname pairing units collision? authorized] :as change-set}]
+  (let [routing-state (assoc (table-routing-state capabilities (mapv :entry units) pairing)
+                        :surviving-sqls (:surviving-sqls planning-context)
+                        :rename-collision? collision?
+                        :authorized-col-drops (set (keys authorized)))]
+    (assoc change-set :routed
+      (mapv (fn [u]
+              (assoc u :route (route-table-entry capabilities tname pairing
+                                routing-state (:entry u))))
+        units))))
+
+(defn- in-place-result
+  "The in-place branch of ADR 0006's selection rule: every unit's ops in
+  declared column order, each gated by its entry's gates, led by the
+  :rename-table op when the table is fused. A unit that routed nowhere
+  leaves its entries unhandled with the refusals routing gave."
+  [planning-context {:keys [tname pairing fused routed]}]
+  {:ops (declared-position (:declared-table pairing)
+          (into (vec (when fused
+                       [(rename-table-op (:name (:live-table pairing)) tname
+                          (fused-serves fused))]))
+            (mapcat (fn [u]
+                      (attach-unit-gates
+                        (entry-gates planning-context pairing :in-place (:entry u))
+                        (map #(assoc-in % [:op :serves] (unit-serves fused u))
+                          (:ops (:route u))))))
+            routed))
+   :unhandled (merge-refusals
+                (keep (fn [{:keys [route] :as u}]
+                        (when-not (:ops route)
+                          (unit-refusals fused u
+                            (concat (:refuse route) (:needs-intent route)))))
+                  routed))})
+
+(defn- rebuild-disabled-result
+  "The result when the change set needs a rebuild and the `:rebuild?`
+  capability is off: no ops, every entry unhandled."
+  [{:keys [fused routed]}]
+  {:ops []
+   :unhandled (merge-refusals
+                (map (fn [{:keys [route] :as u}]
+                       ;; a no-route (:refuse) entry keeps only its own
+                       ;; refusals — a rebuild would not help it either
+                       (unit-refusals fused u
+                         (if (:refuse route)
+                           (:refuse route)
+                           (concat (:rebuild route) (:needs-intent route)
+                             [(rebuild-disabled-refusal (entry-what (:entry u)))]))))
+                  routed))})
+
+(defn- rebuild-blockers
+  "What refuses even with rebuilds allowed. ADR 0007: an older target
+  just rebuilds more — unless a destructive drop still awaits intent,
+  or the declared shape is one the target version cannot hold, since
+  the rebuild would have to create it."
+  [capabilities {{:keys [declared-table]} :pairing :keys [routed]}]
+  (into (vec (unsupported-object-refusals capabilities declared-table))
+    (mapcat (fn [{:keys [route]}]
+              (concat (:refuse route) (:rebuild route) (:needs-intent route))))
+    routed))
+
+(defn- blocked-result
+  "The result when a blocker rides the change set: no ops, every entry
+  unhandled with its own refusals plus every blocker."
+  [{:keys [fused routed]} blockers]
+  {:ops []
+   :unhandled (merge-refusals
+                (map (fn [{:keys [route] :as u}]
+                       (unit-refusals fused u
+                         (distinct (concat (:refuse route) (:rebuild route)
+                                     (:needs-intent route) blockers))))
+                  routed))})
+
+(defn- rebuild-result
+  "The collapse branch of ADR 0006's selection rule: one :rebuild-table
+  op serving every entry of the change set, carrying every gate the
+  units want proven before the copy."
+  [planning-context {:keys [tname pairing fused entries units]}]
+  (let [gates (into [] (mapcat #(entry-gates planning-context pairing :rebuild (:entry %))) units)]
+    {:ops [(cond-> (rebuild-table-op planning-context
+                     (if fused (:name (:live-table pairing)) tname)
+                     (or (fused-serves fused) (into #{} (map :path) entries))
+                     pairing)
+             (seq gates) (update :op assoc :gates gates))]
+     :unhandled {}}))
 
 (defn- plan-table-changes
   "The shared core planning one changed table's (or fused pair's)
@@ -1302,110 +1525,49 @@
   directive with the removed and added whole-table entries: ops then
   lead with the :rename-table op and target the declared name, every
   op serves both whole-table entries, and every refusal rides on both.
+  `pairing` is the live table paired with its declared counterpart;
+  fusion completes it with the `:rename-map` linking their columns.
   Returns `{:ops [...] :unhandled {entry refusals} :used
   [directives]}`."
-  [capabilities pctx dctx tname entries live-table declared-table fused]
-  (let [lt-fold (x/fold-name (:name live-table))
-        serves-pair (when fused #{(:path (:removed fused)) (:path (:added fused))})
-        {:keys [units rename-directives rename-map collision?]}
-        (fuse-column-entries tname entries live-table declared-table
-          (get (:column-renames dctx) lt-fold) (nil? fused))
-        authorized (get (:drop-columns dctx) lt-fold)
-        removed-folds (into #{} (comp (map :entry)
-                                  (filter #(and (= 4 (count (:path %)))
-                                             (= :column (nth (:path %) 2))
-                                             (= :removed (:kind %))))
-                                  (map #(x/fold-name (peek (:path %)))))
-                        units)
-        used (-> (vec (when fused [(:directive fused)]))
-               (into rename-directives)
-               (into (keep (fn [[f dv]] (when (contains? removed-folds f) dv)))
-                 authorized))
-        ctx (assoc (changed-table-ctx capabilities (mapv :entry units) live-table declared-table)
-              :surviving-sqls (:surviving-sqls pctx)
-              :rename-collision? collision?
-              :authorized-col-drops (set (keys authorized)))
-        gctx {:live-table live-table
-              :declared-table declared-table
-              :rename-map rename-map
-              :live-snapshot (:live-snapshot pctx)
-              :declared-snapshot (:declared-snapshot pctx)}
-        routed (mapv (fn [u] (assoc u :route (route-table-entry capabilities tname ctx (:entry u))))
-                 units)
-        collapse? (boolean (some #(contains? (:route %) :rebuild) routed))
-        serves-of (fn [u] (or serves-pair (into #{} (map :path) (:orig u))))
-        unhandled-for (fn [u refusals]
-                        (let [rs (vec refusals)]
-                          (if fused
-                            {(:removed fused) rs (:added fused) rs}
-                            (zipmap (:orig u) (repeat rs)))))
-        merge-unh (fn [maps]
-                    (apply merge-with (fn [a b] (vec (distinct (concat a b)))) {} maps))]
+  [capabilities planning-context claims tname entries pairing fused]
+  (let [lt-fold (x/fold-name (:name (:live-table pairing)))
+        ;; fusion both consumes the pairing and hands it back with its
+        ;; :rename-map resolved — nothing below wants the unresolved one
+        {:keys [units rename-directives pairing collision?]}
+        (fuse-column-entries tname entries pairing
+          (get (:column-renames claims) lt-fold) (nil? fused))
+        authorized (get (:drop-columns claims) lt-fold)
+        ;; from here down the table's whole pending change travels as
+        ;; one change set — see the vocabulary above `attach-routes`
+        change-set (attach-routes capabilities planning-context
+                     {:tname tname :pairing pairing :fused fused
+                      :entries entries :units units
+                      :collision? collision? :authorized authorized})
+        collapse? (boolean (some #(contains? (:route %) :rebuild) (:routed change-set)))]
     (assoc
       (cond
         (not collapse?)
-        {:ops (declared-position declared-table
-                (into (vec (when fused
-                             [(rename-table-op (:name live-table) tname serves-pair)]))
-                  (mapcat (fn [u]
-                            (attach-unit-gates
-                              (entry-gates (assoc gctx :alter-validation? true) (:entry u))
-                              (map #(assoc-in % [:op :serves] (serves-of u))
-                                (:ops (:route u))))))
-                  routed))
-         :unhandled (merge-unh
-                      (keep (fn [{:keys [route] :as u}]
-                              (when-not (:ops route)
-                                (unhandled-for u (concat (:refuse route) (:needs-intent route)))))
-                        routed))}
+        (in-place-result planning-context change-set)
 
         (not (:rebuild? capabilities))
-        {:ops []
-         :unhandled (merge-unh
-                      (map (fn [{:keys [route] :as u}]
-                             ;; a no-route (:refuse) entry keeps only its own
-                             ;; refusals — a rebuild would not help it either
-                             (unhandled-for u
-                               (if (:refuse route)
-                                 (:refuse route)
-                                 (concat (:rebuild route) (:needs-intent route)
-                                   [(rebuild-disabled-refusal (entry-what (:entry u)))]))))
-                        routed))}
+        (rebuild-disabled-result change-set)
 
         :else
-        ;; ADR 0007: with rebuilds allowed an older target just rebuilds
-        ;; more — no refusal, unless a blocker rides the change set: a
-        ;; destructive drop still awaiting intent, or a declared shape
-        ;; the target version cannot hold (the rebuild would create it).
-        (let [blockers (into (vec (unsupported-object-refusals capabilities declared-table))
-                         (mapcat (fn [{:keys [route]}]
-                                   (concat (:refuse route) (:rebuild route) (:needs-intent route))))
-                         routed)]
+        (let [blockers (rebuild-blockers capabilities change-set)]
           (if (seq blockers)
-            {:ops []
-             :unhandled (merge-unh
-                          (map (fn [{:keys [route] :as u}]
-                                 (unhandled-for u
-                                   (distinct (concat (:refuse route) (:rebuild route)
-                                               (:needs-intent route) blockers))))
-                            routed))}
-            {:ops [(let [gates (into [] (mapcat #(entry-gates gctx (:entry %))) units)]
-                     (cond-> (rebuild-table-op pctx
-                               (if fused (:name live-table) tname)
-                               (or serves-pair (into #{} (map :path) entries))
-                               live-table declared-table rename-map)
-                       (seq gates) (update :op assoc :gates gates)))]
-             :unhandled {}})))
-      :used used)))
+            (blocked-result change-set blockers)
+            (rebuild-result planning-context change-set))))
+      :used (used-directives fused rename-directives authorized
+              (removed-column-folds units)))))
 
 (defn- plan-changed-table
   "Plan the entries of one changed regular table under the resolved
   directive claims — see `plan-table-changes` for the selection rule
   and return shape."
-  [capabilities pctx dctx tname entries]
-  (plan-table-changes capabilities pctx dctx tname entries
-    (table-context (:live-snapshot pctx) :live tname)
-    (table-context (:declared-snapshot pctx) :declared tname)
+  [capabilities planning-context claims tname entries]
+  (plan-table-changes capabilities planning-context claims tname entries
+    {:live-table (table-context (:live-snapshot planning-context) :live tname)
+     :declared-table (table-context (:declared-snapshot planning-context) :declared tname)}
     nil))
 
 ;; ---------------------------------------------------------------------------
@@ -1420,12 +1582,15 @@
   in place the name change is a :rename-table op ordered first, and a
   collapse rides one :rebuild-table whose copy maps the live name (and
   any renamed columns) to the declared ones."
-  [capabilities pctx dctx removed added directive]
-  (let [live-table (table-context (:live-snapshot pctx) :live (second (:path removed)))
-        declared-table (table-context (:declared-snapshot pctx) :declared (second (:path added)))]
-    (plan-table-changes capabilities pctx dctx (:name declared-table)
-      (d/fused-entries live-table declared-table)
-      live-table declared-table
+  [capabilities planning-context claims removed added directive]
+  (let [pairing {:live-table (table-context (:live-snapshot planning-context)
+                               :live (second (:path removed)))
+                 :declared-table (table-context (:declared-snapshot planning-context)
+                                   :declared (second (:path added)))}]
+    (plan-table-changes capabilities planning-context claims
+      (:name (:declared-table pairing))
+      (d/fused-entries (:live-table pairing) (:declared-table pairing))
+      pairing
       {:directive directive :removed removed :added added})))
 
 ;; ---------------------------------------------------------------------------
@@ -1440,7 +1605,7 @@
   (let [t (:declared entry)
         tfold (x/fold-name (:name t))
         serves #{(:path entry)}]
-    (into [(op [phase-create-tables tfold] :create-table (:path entry) serves [(:sql t)])]
+    (into [(ordered-op [phase-create-tables tfold] :create-table (:path entry) serves [(:sql t)])]
       (concat
         (for [[nm idx] (sort-by key (:indexes t))]
           (create-secondary-op 0 :create-index (conj (:path entry) :index nm)
@@ -1451,10 +1616,10 @@
 
 (defn- plan-table-group
   "Plan one table's entries: a whole-table entry stands alone; anything
-  else is a changed table planned fine-grained. `dctx` carries the
+  else is a changed table planned fine-grained. `claims` carries the
   resolved directive claims (ADR 0009): a whole-table removal plans as
   a phase-2 :drop-table op when a :drop-table directive authorizes it."
-  [capabilities pctx dctx tname entries]
+  [capabilities planning-context claims tname entries]
   (let [whole (some #(when (= 2 (count (:path %))) %) entries)]
     (cond
       (and whole (= :added (:kind whole)))
@@ -1464,10 +1629,10 @@
           {:ops (create-table-ops whole) :unhandled {}}))
 
       (and whole (= :removed (:kind whole)))
-      (if-let [directive (get (:drop-tables dctx) (x/fold-name tname))]
-        {:ops [(op [phase-drop-tables (x/fold-name tname)]
+      (if-let [directive (get (:drop-tables claims) (x/fold-name tname))]
+        {:ops [(ordered-op [phase-drop-tables (x/fold-name tname)]
                  :drop-table (:path whole) #{(:path whole)}
-                 [(str "DROP TABLE " (u/q-ident tname))])]
+                 [(str "DROP TABLE " (u/quote-identifier tname))])]
          :unhandled {}
          :used [directive]}
         {:ops [] :unhandled {whole [(destructive-refusal (str "table " tname))]}})
@@ -1479,7 +1644,7 @@
                               " module-owned shadow tables — no general alter or"
                               " rebuild exists"))]}}
 
-      :else (plan-changed-table capabilities pctx dctx tname entries))))
+      :else (plan-changed-table capabilities planning-context claims tname entries))))
 
 (defn- plan-view-group
   "Plan one view's whole-value entry (a view never carries fine-grained
@@ -1625,8 +1790,8 @@
   the live side, unless both carry byte-identical provenance."
   [live declared diff]
   (doseq [[side snapshot from-diff facet]
-          [[:live live (:live-metadata diff) identity]
-           [:declared declared (:declared-metadata diff) :sqlite-version]]]
+          [[:live live (:live-provenance diff) identity]
+           [:declared declared (:declared-provenance diff) :sqlite-version]]]
     (when (not= (facet (meta snapshot)) (facet from-diff))
       (u/malformed! (str "the " (name side) " Snapshot is not the one this Diff"
                       " was computed from")
@@ -1634,10 +1799,106 @@
          :snapshot-provenance (meta snapshot)
          :diff-provenance from-diff}))))
 
+(defn- resolve-claims
+  "The directive claims planning reads, indexed by folded live name (ADR
+  0009): `{:drop-tables {tfold d} :column-renames {tfold [d ...]}
+  :drop-columns {tfold {cfold d}}}`. A table's column claims stay in
+  directive order, so planning consumes them as the caller wrote them."
+  [directives]
+  {:drop-tables (into {} (comp (filter #(= :drop-table (:directive %)))
+                           (map (fn [dv] [(x/fold-name (:table dv)) dv])))
+                  directives)
+   :column-renames (reduce (fn [m dv]
+                             (if (= :rename-column (:directive dv))
+                               (update m (x/fold-name (:table dv)) (fnil conj []) dv)
+                               m))
+                     {} directives)
+   :drop-columns (reduce (fn [m dv]
+                           (if (= :drop-column (:directive dv))
+                             (assoc-in m [(x/fold-name (:table dv))
+                                          (x/fold-name (:column dv))]
+                               dv)
+                             m))
+                   {} directives)})
+
+(defn- entry-group-key
+  "The group `entry` belongs to: its object kind paired with its folded
+  object name. Entries of one object plan together (ADR 0006)."
+  [entry]
+  [(first (:path entry)) (x/fold-name (second (:path entry)))])
+
+(defn- whole-table-entry
+  "The lone whole-object entry of the group keyed `k` in `groups-by-key`
+  — the group holds exactly one entry, of kind `kind`, naming the
+  object itself. Nil otherwise; only such a group can fuse (ADR 0009)."
+  [groups-by-key k kind]
+  (let [g (groups-by-key k)
+        e (first g)]
+    (when (and (= 1 (count g)) (= 2 (count (:path e))) (= kind (:kind e)))
+      e)))
+
+(defn- fused-table-pairs
+  "The :rename-table directives matching a removed/added whole-table
+  pair among `groups` (ADR 0009), in directive order, each as
+  `{:directive d :removed e :added e}`."
+  [directives groups]
+  (let [by-key (into {} (map (juxt (comp entry-group-key first) identity)) groups)]
+    (vec (for [dv directives
+               :when (= :rename-table (:directive dv))
+               :let [removed (whole-table-entry by-key [:table (x/fold-name (:from dv))] :removed)
+                     added (whole-table-entry by-key [:table (x/fold-name (:to dv))] :added)]
+               :when (and removed added
+                       ;; a virtual pair never fuses: no general
+                       ;; alter or rebuild exists (ADR 0007)
+                       (not (:virtual? (:live removed)))
+                       (not (:virtual? (:declared added))))]
+           {:directive dv :removed removed :added added}))))
+
+(defn- fused-group-keys
+  "The group keys the fused pairs consume — a fused pair's two groups
+  plan together, so neither may plan again on its own."
+  [fused]
+  (into #{} (mapcat (fn [{:keys [removed added]}]
+                      [(entry-group-key removed) (entry-group-key added)]))
+    fused))
+
+(defn- planning-context-for
+  "The planning context every table planner threads: both Snapshots and
+  what the phase-1 drops leave standing (ADR 0006)."
+  [live declared entries]
+  (let [dependents (surviving-dependents live entries)]
+    {:live-snapshot live
+     :declared-snapshot declared
+     :surviving-dependents dependents
+     :surviving-sqls (surviving-referencer-sqls dependents)}))
+
+(defn- plan-entry-group
+  "Plan one group of Diff entries — the view planner for a view group,
+  the table planner otherwise."
+  [capabilities planning-context claims group]
+  (let [[kind nm] (:path (first group))]
+    (if (= :view kind)
+      (plan-view-group capabilities nm group)
+      (plan-table-group capabilities planning-context claims nm group))))
+
+(defn- collect-results
+  "Fold the per-group results into the Plan's entry-facing pieces:
+  `:ops` in execution order (ADR 0006), `:unhandled` in Diff-entry
+  order as `{:entry e :refusals [...]}`, and `:used` — the set of
+  directives some group consumed."
+  [entries results]
+  (let [by-entry (apply merge {} (map :unhandled results))]
+    {:ops (mapv :op (sort-by :order (into [] (mapcat :ops) results)))
+     :unhandled (into [] (keep (fn [e]
+                                 (when-let [refusals (get by-entry e)]
+                                   {:entry e :refusals refusals})))
+                  entries)
+     :used (into #{} (mapcat :used) results)}))
+
 (defn plan
   "Plan `diff` — computed from Snapshots `live` and `declared` — into an
   ordered, self-contained Plan value (ADR 0006): `{:ops [...]
-  :unhandled [...] :live-metadata ... :declared-metadata ...
+  :unhandled [...] :live-provenance ... :declared-provenance ...
   :capabilities ... :directives [...] :unused-directives [...]}` —
   plain EDN, list position is execution order, byte-identical for
   identical inputs (ADR 0010).
@@ -1668,75 +1929,25 @@
           directives (vec (:directives opts))
           _ (validate-directives! directives)
           entries (:entries diff)
-          dependents (surviving-dependents live entries)
-          ;; the planning context every table planner threads: both
-          ;; Snapshots and what the phase-1 drops leave standing
-          pctx {:live-snapshot live
-                :declared-snapshot declared
-                :surviving-dependents dependents
-                :surviving-sqls (surviving-referencer-sqls dependents)}
-          groups (partition-by (fn [e] [(first (:path e)) (x/fold-name (second (:path e)))])
-                   entries)
-          group-key (fn [g] [(first (:path (first g))) (x/fold-name (second (:path (first g))))])
-          by-key (into {} (map (juxt group-key identity)) groups)
-          whole-entry (fn [k kind]
-                        (let [g (by-key k)
-                              e (first g)]
-                          (when (and (= 1 (count g)) (= 2 (count (:path e)))
-                                  (= kind (:kind e)))
-                            e)))
-          fused (vec (for [dv directives
-                           :when (= :rename-table (:directive dv))
-                           :let [removed (whole-entry [:table (x/fold-name (:from dv))] :removed)
-                                 added (whole-entry [:table (x/fold-name (:to dv))] :added)]
-                           :when (and removed added
-                                   ;; a virtual pair never fuses: no general
-                                   ;; alter or rebuild exists (ADR 0007)
-                                   (not (:virtual? (:live removed)))
-                                   (not (:virtual? (:declared added))))]
-                       {:directive dv :removed removed :added added}))
-          consumed (into #{} (mapcat (fn [{:keys [removed added]}]
-                                       [[:table (x/fold-name (second (:path removed)))]
-                                        [:table (x/fold-name (second (:path added)))]]))
-                     fused)
-          dctx {:drop-tables (into {} (comp (filter #(= :drop-table (:directive %)))
-                                        (map (fn [dv] [(x/fold-name (:table dv)) dv])))
-                               directives)
-                :column-renames (reduce (fn [m dv]
-                                          (if (= :rename-column (:directive dv))
-                                            (update m (x/fold-name (:table dv)) (fnil conj []) dv)
-                                            m))
-                                  {} directives)
-                :drop-columns (reduce (fn [m dv]
-                                        (if (= :drop-column (:directive dv))
-                                          (assoc-in m [(x/fold-name (:table dv))
-                                                       (x/fold-name (:column dv))]
-                                            dv)
-                                          m))
-                                {} directives)}
-          results (-> (into [] (keep (fn [g]
-                                       (when-not (contains? consumed (group-key g))
-                                         (let [e (first g)
-                                               nm (second (:path e))]
-                                           (if (= :view (first (:path e)))
-                                             (plan-view-group capabilities nm g)
-                                             (plan-table-group capabilities pctx dctx nm g))))))
-                        groups)
-                    (into (map (fn [{:keys [directive removed added]}]
-                                 (plan-fused-table capabilities pctx dctx removed added directive)))
-                      fused))
-          ops (mapv :op (sort-by :order (into [] (mapcat :ops) results)))
-          by-entry (apply merge {} (map :unhandled results))
-          unhandled (into [] (keep (fn [e]
-                                     (when-let [refusals (get by-entry e)]
-                                       {:entry e :refusals refusals})))
-                      entries)
-          used (into #{} (mapcat :used) results)]
+          planning-context (planning-context-for live declared entries)
+          claims (resolve-claims directives)
+          groups (partition-by entry-group-key entries)
+          fused (fused-table-pairs directives groups)
+          consumed (fused-group-keys fused)
+          results (into (into [] (keep (fn [g]
+                                         (when-not (contains? consumed (entry-group-key (first g)))
+                                           (plan-entry-group capabilities planning-context claims g))))
+                          groups)
+                    (map (fn [{:keys [directive removed added]}]
+                           (plan-fused-table capabilities planning-context claims
+                             removed added directive)))
+                    fused)
+          {:keys [ops unhandled used]} (collect-results entries results)]
       (check-completeness! entries ops unhandled)
       {:ops ops
        :unhandled unhandled
-       :live-metadata (:live-metadata diff)
-       :declared-metadata (:declared-metadata diff)
+       :live-provenance (:live-provenance diff)
+       :declared-provenance (:declared-provenance diff)
        :capabilities capabilities
        :directives directives
        :unused-directives (filterv (complement used) directives)})))

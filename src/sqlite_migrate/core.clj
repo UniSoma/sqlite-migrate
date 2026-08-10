@@ -216,7 +216,7 @@
           (bail! (str "Declaration statement " index " created engine-internal"
                    " table " name " — a Snapshot cannot capture what it does")
             {:table name}))
-        (when (seq (q conn (str "SELECT 1 FROM " (u/q-ident name) " LIMIT 1")))
+        (when (seq (q conn (str "SELECT 1 FROM " (u/quote-identifier name) " LIMIT 1")))
           (bail! (str "Declaration statement " index " left rows in table "
                    name " — a Snapshot carries schema, never data")
             {:table name}))))))
@@ -296,7 +296,7 @@
   "Plan `diff` — computed from Snapshots `live` and `declared`, which
   are required planning context, not options (ADR 0017) — into an
   ordered, self-contained Plan: `{:ops [...] :unhandled [...]
-  :live-metadata ... :declared-metadata ... :capabilities ...
+  :live-provenance ... :declared-provenance ... :capabilities ...
   :directives [...] :unused-directives [...]}` — list position is
   execution order, every Diff entry either served by ≥1 op or honestly
   unhandled with its full Refusal vector, byte-identical for identical
@@ -339,15 +339,15 @@
   lower-level exception that surfaced the drift, if there was one."
   ([plan live-fingerprint] (drift-refused! plan live-fingerprint nil))
   ([plan live-fingerprint cause]
-    (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])]
+    (let [plan-fingerprint (get-in plan [:live-provenance :schema-version])]
       (throw (ex-info (str "live schema_version " live-fingerprint
                         " does not match the plan's source fingerprint "
                         plan-fingerprint)
                {:sqlite-migrate/error :drift-refused
                 :plan-fingerprint plan-fingerprint
                 :live-fingerprint live-fingerprint
-                :live-metadata (:live-metadata plan)
-                :declared-metadata (:declared-metadata plan)}
+                :live-provenance (:live-provenance plan)
+                :declared-provenance (:declared-provenance plan)}
                cause)))))
 
 (defn- verify-fingerprint!
@@ -359,7 +359,7 @@
   SQLite itself just reported, so it is an integer."
   [conn plan]
   (let [live-fingerprint (current-fingerprint conn)]
-    (when (not= (get-in plan [:live-metadata :schema-version]) live-fingerprint)
+    (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
       (drift-refused! plan live-fingerprint))))
 
 (defn- plan-gates
@@ -462,7 +462,7 @@
   drift refusal (ADR 0016)."
   [plan]
   (str "SELECT * FROM pragma_schema_version WHERE schema_version <> "
-    (get-in plan [:live-metadata :schema-version])))
+    (get-in plan [:live-provenance :schema-version])))
 
 (defn- gates-violated!
   "Translate the executor's `:gates-violated` payload into the public
@@ -544,7 +544,7 @@
               (throw (ex-info "SQLite error during apply"
                        {:sqlite-migrate/error :sqlite-error}
                        e))))))
-      (cond-> (assoc (select-keys plan [:live-metadata :declared-metadata :ops])
+      (cond-> (assoc (select-keys plan [:live-provenance :declared-provenance :ops])
                 :schema-version (current-fingerprint conn))
         check-gates? (assoc :check
                        ;; the Frame threw on any row, so every Gate passed

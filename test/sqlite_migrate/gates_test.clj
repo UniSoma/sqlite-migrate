@@ -11,7 +11,8 @@
     [sqlite-migrate.core :as m]
     [sqlite-migrate.impl.plan :as plan]
     [sqlite-migrate.jdbc :as sql-jdbc]
-    [sqlite-migrate.protocols :as p]))
+    [sqlite-migrate.protocols :as p]
+    [sqlite-migrate.test-util :refer [thrown-info]]))
 
 (def ^:private lim
   "The sample limit the planner bakes into every Gate. Read from the
@@ -434,9 +435,9 @@
       ;; that violate. Reading `:more?` off the running constant would
       ;; call this a clean count of 3.
       (let [foreign-limit 3
-            pl {:live-metadata {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
+            pl {:live-provenance {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
                                                   first :schema_version)}
-                :declared-metadata {}
+                :declared-provenance {}
                 :ops [{:kind :set-not-null
                        :gates [{:code :not-null
                                 :path [:table "t" :column "b"]
@@ -454,7 +455,7 @@
     (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
     (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])]
       (p/execute-batch! live ["CREATE TABLE drifted (x INTEGER)"])
-      (let [ex (try (m/check live pl) nil (catch Exception e e))]
+      (let [ex (thrown-info (m/check live pl))]
         (is (some? ex)
           "check refuses rather than returning: Gates compiled against a dead schema cannot answer about the live one (ADR 0018)")
         (is (= :drift-refused (:sqlite-migrate/error (ex-data ex))))))))
@@ -470,7 +471,7 @@
        "INSERT INTO t (a, b) VALUES (1, 'x'), (2, NULL)"])
     (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
           before (m/snapshot live)
-          ex (try (m/apply! live pl) nil (catch Exception e e))]
+          ex (thrown-info (m/apply! live pl))]
       (is (some? ex) "apply! must throw when a Gate fails")
       (testing "the throw carries the Check result verbatim"
         (is (= :gate-failed (:sqlite-migrate/error (ex-data ex))))
@@ -494,7 +495,7 @@
       ["CREATE TABLE t (a INTEGER, b TEXT)"
        "INSERT INTO t (a, b) VALUES (1, NULL)"])
     (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
-          ex (try (m/apply! live pl {:check-gates? false}) nil (catch Exception e e))]
+          ex (thrown-info (m/apply! live pl {:check-gates? false}))]
       (is (some? ex))
       (is (= :sqlite-error (:sqlite-migrate/error (ex-data ex)))
         "with gates skipped the raw SQLite failure surfaces instead")
@@ -523,12 +524,11 @@
        "INSERT INTO t (a, b) VALUES (1, NULL)"])
     (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
           refusal (fn [opts]
-                    (ex-data (try (m/apply! (drifting-executor live) pl opts)
-                               nil (catch Exception e e))))]
+                    (ex-data (thrown-info (m/apply! (drifting-executor live) pl opts))))]
       (testing "the in-Frame fingerprint probe rides :check-gates? false too"
         (let [data (refusal {:check-gates? false})]
           (is (= :drift-refused (:sqlite-migrate/error data)))
-          (is (= (get-in pl [:live-metadata :schema-version])
+          (is (= (get-in pl [:live-provenance :schema-version])
                 (:plan-fingerprint data)))
           (is (integer? (:live-fingerprint data)))
           (is (not= (:plan-fingerprint data) (:live-fingerprint data)))))
@@ -711,7 +711,7 @@
     :conforming ["INSERT INTO t (i, r) VALUES ('0123', '00.5'), (' 1e2 ', '1e999'), ('+12', '.5')"]
     :violating ["INSERT INTO t (i, r) VALUES ('9223372036854775808', 1)"]}])
 
-(deftest gate-bidirectionality-property
+(deftest gate-outcomes-match-sqlites-own-enforcement
   (doseq [{:keys [scenario live declared conforming violating]} bidirectionality-scenarios]
     (testing (str scenario ": Check pass implies no data-dependent apply failure")
       (with-open [conn (sql-jdbc/in-memory)]
@@ -725,6 +725,6 @@
         (p/execute-batch! conn (into (vec live) violating))
         (let [pl (live-plan conn declared)]
           (is (false? (:pass? (m/check conn pl))))
-          (let [ex (try (m/apply! conn pl {:check-gates? false}) nil (catch Exception e e))]
+          (let [ex (thrown-info (m/apply! conn pl {:check-gates? false}))]
             (is (some? ex) "running apply anyway aborts on SQLite's own enforcement")
             (is (= :sqlite-error (:sqlite-migrate/error (ex-data ex))))))))))

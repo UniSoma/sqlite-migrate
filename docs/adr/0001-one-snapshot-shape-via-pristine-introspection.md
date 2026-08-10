@@ -27,5 +27,5 @@ deferrability) out of the stored CREATE text as opaque expression text, stored v
 - The diff never knows which side came from a file and which from a declaration.
 - Introspection reads the `main` schema only, through the library's own bundled SQLite —
   so the introspection surface (table_list, table_xinfo, 3.53 ALTER forms) is always
-  available, and Snapshot metadata records provenance for reproducibility, not
-  capability gating.
+  available, and Snapshot provenance records where a Snapshot came from for
+  reproducibility, not capability gating.

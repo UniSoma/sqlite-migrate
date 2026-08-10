@@ -7,7 +7,7 @@ A Plan is a thin wrapper map produced by the pure function
 entries as work items plus the two Snapshots it was computed from, passed as
 arguments because the Diff embeds only their provenance. The wrapper
 holds exactly three things: an ordered `:ops` vector, both sides' Snapshot
-metadata (so a Plan states what live state it was computed against), and the
+provenance (so a Plan states what live state it was computed against), and the
 capabilities it was planned for. Capabilities (target SQLite version, defaulting
 to latest) are an explicit planner input: the same Diff legitimately produces
 different Plans for different targets.
@@ -44,7 +44,7 @@ executes each op's `:sql` in plan order inside the frame, never reorders,
 rewrites, or skips; stops at the first error and rolls back; all-or-nothing by
 default (variants belong to execution policies). Before executing, Apply
 re-checks the live file's `schema_version` fingerprint against the Plan's
-embedded source Snapshot metadata and refuses to run against a drifted database.
+embedded source Snapshot provenance and refuses to run against a drifted database.
 
 Completeness is a locked invariant: every Diff entry is either served by ≥1 op
 or listed in the wrapper's **unhandled-entries collection** with a reason

@@ -32,11 +32,11 @@
         report (m/plan-report plan)]
     (testing "the header names both sides' identity"
       (is (str/includes? report
-            (str (get-in plan [:live-metadata :schema-version]))))
+            (str (get-in plan [:live-provenance :schema-version]))))
       (is (str/includes? report
-            (str (get-in plan [:declared-metadata :schema-version]))))
+            (str (get-in plan [:declared-provenance :schema-version]))))
       (is (str/includes? report
-            (get-in plan [:live-metadata :sqlite-version]))))
+            (get-in plan [:live-provenance :sqlite-version]))))
     (testing "every op renders kind, path, and its gates' code and explanation"
       (is (str/includes? report "rebuild-table"))
       (is (str/includes? report (pr-str [:table "t"])))

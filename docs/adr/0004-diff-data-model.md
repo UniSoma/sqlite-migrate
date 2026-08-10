@@ -1,7 +1,7 @@
 # The Diff is a flat, self-contained, intent-free EDN value
 
 A Diff is a thin wrapper map — a flat sequence of Diff entries plus both sides'
-Snapshot metadata — produced by `diff(live, declared)`. Each entry is one
+Snapshot provenance — produced by `diff(live, declared)`. Each entry is one
 self-contained semantic difference: a target-relative change kind (`added` =
 declared-only, `removed` = live-only, `changed` = both sides present but not
 equivalent), a path addressing the object, both sides' verbatim sub-values, and for

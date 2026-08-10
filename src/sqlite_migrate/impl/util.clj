@@ -4,7 +4,7 @@
   Depends on `clojure.string` only."
   (:require [clojure.string :as str]))
 
-(defn q-ident
+(defn quote-identifier
   "Quote `s` as a SQL identifier spelled verbatim — no munging, no case
   folding. Embedded double quotes are doubled per SQLite quoting rules."
   ^String [^String s]

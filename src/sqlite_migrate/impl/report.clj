@@ -113,8 +113,8 @@
   (str
     (str/join "\n"
       (concat
-        [(identity-line "live    " (:live-metadata plan))
-         (identity-line "declared" (:declared-metadata plan))]
+        [(identity-line "live    " (:live-provenance plan))
+         (identity-line "declared" (:declared-provenance plan))]
         (mapcat op-lines (range) (:ops plan))
         (mapcat unhandled-lines (:unhandled plan))
         (map #(str "unused directive  " (pr-str %)) (:unused-directives plan))))

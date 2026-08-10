@@ -6,7 +6,7 @@ type: task
 priority: 2
 mode: afk
 created: '2026-08-10T17:33:03.675725537Z'
-updated: '2026-08-10T17:33:03.675725537Z'
+updated: '2026-08-10T17:37:09.592439497Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: 'The No-op property asserts both directions: equivalent schemas yield an empty Diff, and a mutated schema yields a non-empty Diff'
@@ -15,6 +15,8 @@ acceptance:
   done: false
 - title: Deliberately breaking either direction fails the property
   done: false
+tags:
+- phase-3
 ---
 
 ## Description

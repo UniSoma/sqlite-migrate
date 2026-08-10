@@ -184,6 +184,35 @@ terms; unmatched directives are inert and reported in the Plan as unused. Lifts
 or renamed.
 _Avoid_: hint, annotation, migration option, override
 
+**Claim**:
+A Directive resolved against the live side it names. The planner indexes the supplied
+Directives by folded live table name — table drops, column renames, column drops — and
+reads one table's claims as it plans that table. One table's rename claims resolve as a
+set, the greatest that satisfies simultaneously, so swaps and chains resolve together
+while a half-match drops out inert. The verb sense is literal: a rename claims the Diff
+entries on its live `from` side and its declared `to` side, and those entries fuse into
+one synthetic `changed` entry.
+_Avoid_: hint, annotation, resolved directive, directive index
+
+**Pairing**:
+One live table paired with its declared counterpart, plus the rename map linking their
+columns. The planner's central value for a table change: routing, the rebuild family,
+the gate family, and the shared planning core all read it. It is created without the
+rename map and completed by column fusion, which resolves the map from the active rename
+claims — declared folded name to live column name — so the rebuild's copy follows the
+rename.
+_Avoid_: table pair, context, ctx
+
+**Change set**:
+One table's whole pending change, planned as one thing under ADR 0006's selection rule:
+the table's Diff entries together with the Pairing they plan against and the routing they
+resolve to. The rule is all-or-nothing over a change set: every change achievable in
+place plans in place; otherwise the whole set collapses into one `:rebuild-table`. Never
+a mix. A change set that must collapse but cannot — the `:rebuild?` capability is off, or
+a blocker rides it — leaves every entry in it unhandled.
+_Avoid_: entry group, batch; unit for the set (a change set's entries fuse into units,
+and a unit is one fused entry)
+
 **Drift report**:
 The human-readable plain-text rendering of a Diff: per-fact both-sides lines for changed
 objects, whole verbatim CREATE sql for one-sided ones. Presentation only — never a parse

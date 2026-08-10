@@ -20,7 +20,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Pure compilation
 
-(deftest compiles-a-minimal-table-with-verbatim-quoted-identifiers
+(deftest identifiers-compile-quoted-verbatim-without-munging-or-folding
   (testing "identifiers compile to quoted verbatim spelling — no munging, no case folding"
     (is (= ["CREATE TABLE \"Users\" (\"user-id\" INTEGER, \"Name\" TEXT)"]
           (schema/->sql
@@ -54,7 +54,7 @@
       (is (= :malformed-input (:sqlite-migrate/error (ex-data ex))))
       (is (= :varchar (:type (ex-data ex)))))))
 
-(deftest compiles-column-constraints
+(deftest column-constraints-defaults-and-checks-compile-inline
   (testing "primary key, autoincrement, not null, unique, collate"
     (is (= ["CREATE TABLE \"t\" (\"id\" INTEGER PRIMARY KEY AUTOINCREMENT, \"email\" TEXT NOT NULL UNIQUE COLLATE NOCASE)"]
           (schema/->sql
@@ -74,7 +74,7 @@
             {:tables [{:name :t
                        :columns [{:name :x :type :integer :check [:raw "x > 0"]}]}]})))))
 
-(deftest compiles-table-constraints-and-flags
+(deftest table-constraints-and-flags-compile-after-the-column-list
   (testing "table-level primary key, uniques, named checks, and flags"
     (is (= [(str "CREATE TABLE \"t\" (\"a\" INTEGER, \"b\" TEXT, "
               "PRIMARY KEY (\"a\", \"b\"), "
@@ -103,7 +103,7 @@
                        :columns [{:name :a :type :integer}]
                        :primary-key {:name :pk :columns [:a]}}]})))))
 
-(deftest compiles-foreign-keys
+(deftest foreign-keys-compile-with-their-references-and-actions
   (testing "columns, referenced table and columns, actions as keywords or strings"
     (is (= ["CREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY)"
             (str "CREATE TABLE \"posts\" (\"id\" INTEGER PRIMARY KEY, \"author-id\" INTEGER, "
@@ -133,7 +133,7 @@
       (is (some? ex) "->sql must throw on an unknown foreign-key action keyword")
       (is (= :malformed-input (:sqlite-migrate/error (ex-data ex)))))))
 
-(deftest compiles-indexes-nested-under-their-table
+(deftest indexes-compile-as-statements-following-their-table
   (testing "index columns are identifiers or [:raw ...]; :unique? and :where supported"
     (is (= ["CREATE TABLE \"t\" (\"a\" INTEGER, \"b\" INTEGER)"
             "CREATE UNIQUE INDEX \"idx_a\" ON \"t\" (\"a\") WHERE a > 0"
@@ -145,7 +145,7 @@
                        :indexes [{:name :idx_a :columns [:a] :unique? true :where [:raw "a > 0"]}
                                  {:name :idx_expr :columns [[:raw "(a + b)"]]}]}]})))))
 
-(deftest raw-escape-hatches-at-statement-positions
+(deftest raw-is-the-only-form-accepted-at-statement-positions
   (testing "triggers and views are raw-only at launch; top-level :raw statements come last"
     (is (= ["CREATE TABLE \"t\" (\"a\" INTEGER)"
             "CREATE TRIGGER trg AFTER INSERT ON t BEGIN SELECT 1; END"

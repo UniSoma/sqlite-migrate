@@ -6,7 +6,7 @@ type: task
 priority: 2
 mode: afk
 created: '2026-08-10T17:33:03.771310237Z'
-updated: '2026-08-10T17:33:03.771310237Z'
+updated: '2026-08-10T17:37:09.681869310Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: The skip rate for gate-failing scenarios is visible in the test run for each of the three properties
@@ -15,6 +15,8 @@ acceptance:
   done: false
 - title: Suite green with the bound in place
   done: false
+tags:
+- phase-3
 ---
 
 ## Description

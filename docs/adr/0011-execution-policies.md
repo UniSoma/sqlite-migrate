@@ -24,7 +24,7 @@ pass it reflexively, and a library has no business being interactive.
 
 **Outcome channel: throw on non-success.** On success Apply returns an
 **Apply report** — a plain-EDN value carrying the Plan's identity (both
-Snapshot metadata blocks echoed), the gate report from the default pre-check
+Snapshot provenance blocks echoed), the gate report from the default pre-check
 (absent when gate-checking was skipped), the ops executed, and the live
 file's post-apply `schema_version` fingerprint. No timestamps or durations —
 the wrapper-level nondeterminism ADR 0006 evicted. Every non-success —

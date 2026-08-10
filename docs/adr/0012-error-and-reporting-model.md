@@ -18,7 +18,7 @@ consumers must tolerate unknown classes):
 - `:drift-refused` — Apply's or Check's `schema_version` fingerprint mismatch
   (ADR 0018). Payload:
   the Plan's source fingerprint, the live file's actual fingerprint, and both
-  Snapshot-metadata blocks.
+  Snapshot-provenance blocks.
 - `:unhandled-refused` — Apply given a Plan with unhandled entries without
   `:allow-unhandled?`. Payload: the unhandled entries verbatim, each already
   carrying its refusal vector.

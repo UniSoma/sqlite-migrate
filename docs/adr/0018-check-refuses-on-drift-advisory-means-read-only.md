@@ -22,7 +22,7 @@ missing object, which is a worse diagnosis than the accurate one; or —
 strictly worse — a clean pass computed against a table that has since
 changed. A pre-flight whose whole job is to say "your data is ready" must
 never produce a false green. Refusing is the only answer that stays true.
-The payload is Apply's verbatim (both fingerprints, both Snapshot-metadata
+The payload is Apply's verbatim (both fingerprints, both Snapshot-provenance
 blocks); one `drift-refused!` builds it for both edges. The refusal has no
 override at either edge, for ADR 0011's reason: the remedy is cheap and
 always available — re-diff, re-plan.

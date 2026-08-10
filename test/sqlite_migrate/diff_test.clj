@@ -165,15 +165,15 @@
   (let [a (m/diff (snap corpus/nasty-declaration) (snap [(first corpus/nasty-declaration)]))
         b (m/diff (snap corpus/nasty-declaration) (snap [(first corpus/nasty-declaration)]))]
     (testing "identical Snapshot pairs yield byte-identical serialized Diffs"
-      (is (= (pr-str (dissoc a :live-metadata :declared-metadata))
-            (pr-str (dissoc b :live-metadata :declared-metadata)))))
+      (is (= (pr-str (dissoc a :live-provenance :declared-provenance))
+            (pr-str (dissoc b :live-provenance :declared-provenance)))))
     (testing "the whole Diff is plain EDN and survives pr-str/read-string"
       (is (= a (read-string (pr-str a)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Properties on the corpus (ADR 0003, 0010)
 
-(deftest no-op-property-on-the-corpus
+(deftest diff-is-empty-iff-the-snapshots-are-equivalent
   (testing "diff is empty iff the Snapshots are Equivalent"
     (let [a (snap corpus/nasty-declaration)
           b (snap corpus/nasty-declaration)]
@@ -209,7 +209,7 @@
       (map sql views)
       (nested :triggers (concat (remove :virtual? tables) views)))))
 
-(deftest round-trip-property-on-the-corpus
+(deftest emitted-sql-re-introspects-to-an-equivalent-snapshot
   (testing "introspect, emit stored CREATE sql into a pristine database, introspect: Equivalent"
     (let [original (snap corpus/nasty-declaration)
           re-introspected (snap (vec (emit-stored-sql original)))]

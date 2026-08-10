@@ -506,15 +506,15 @@
    "CREATE TABLE born (id INTEGER PRIMARY KEY)"
    "CREATE INDEX idx_born ON born (id)"])
 
-(deftest plan-determinism-property
+(deftest planning-the-same-diff-twice-yields-identical-plans
   (testing "planning the same Diff twice is pr-str-identical"
     (let [l (snap determinism-live)
           d (snap determinism-declared)
           diff (m/diff l d)]
       (is (= (pr-str (m/plan l d diff)) (pr-str (m/plan l d diff))))))
-  (testing "independently rebuilt inputs yield byte-identical Plans (metadata aside)"
+  (testing "independently rebuilt inputs yield byte-identical Plans (provenance aside)"
     (let [plan-once (fn []
                       (dissoc (plan-of determinism-live determinism-declared
                                 {:capabilities {:sqlite-version "3.53.0"}})
-                        :live-metadata :declared-metadata))]
+                        :live-provenance :declared-provenance))]
       (is (= (pr-str (plan-once)) (pr-str (plan-once)))))))

@@ -562,16 +562,20 @@
 (defn probe-insert-sql
   "An INSERT for `table` that omits its AUTOINCREMENT pk and fills every
   other column with row-`i` literals (FK children stay NULL) — the
-  AUTOINCREMENT-continuity property's post-Apply probe."
+  AUTOINCREMENT-continuity property's post-Apply probe. A table whose
+  only column is that pk leaves nothing to name, so the INSERT takes
+  SQLite's `DEFAULT VALUES` form instead of an empty column list."
   [table i]
   (let [cols (vec (remove :autoincrement? (:columns table)))
         fk (fk-col-names table)]
     (str "INSERT INTO " (qid (:name table))
-      " (" (str/join ", " (map (comp qid :name) cols)) ")"
-      " VALUES ("
-      (str/join ", " (for [c cols]
-                       (if (fk (fold (:name c))) "NULL" (literal (:type c) i))))
-      ")")))
+      (if (empty? cols)
+        " DEFAULT VALUES"
+        (str " (" (str/join ", " (map (comp qid :name) cols)) ")"
+          " VALUES ("
+          (str/join ", " (for [c cols]
+                           (if (fk (fold (:name c))) "NULL" (literal (:type c) i))))
+          ")")))))
 
 (defn- table-inserts
   "INSERT statements for one live table: `n` conforming rows, the

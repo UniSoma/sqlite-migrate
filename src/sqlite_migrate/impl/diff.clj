@@ -345,5 +345,5 @@
     {:entries (vec (concat
                      (object-entries :table (:tables live) (:tables declared) table-entries)
                      (object-entries :view (:views live) (:views declared) view-entries)))
-     :live-metadata (meta live)
-     :declared-metadata (meta declared)}))
+     :live-provenance (meta live)
+     :declared-provenance (meta declared)}))

@@ -1,12 +1,13 @@
 ---
 id: sqm-01kzpbqq04y3
 title: Rename the Diff/Plan provenance keys to the glossary word
-status: open
+status: closed
 type: chore
 priority: 1
 mode: afk
 created: '2026-08-10T17:32:42.372107698Z'
-updated: '2026-08-10T17:32:42.372107698Z'
+updated: '2026-08-10T18:37:16.776854852Z'
+closed: '2026-08-10T18:37:16.776854852Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: The Diff, Plan, and Apply report expose :live-provenance and :declared-provenance; the :live-metadata and :declared-metadata spellings appear nowhere in src, test, docs, or README
@@ -17,6 +18,8 @@ acceptance:
   done: false
 - title: Full suite green and clj-kondo clean
   done: false
+tags:
+- phase-1
 ---
 
 ## Description
@@ -28,3 +31,9 @@ Rename to `:live-provenance` / `:declared-provenance` throughout, including the 
 **Timing matters.** These keys already shipped in the `0.1.0-SNAPSHOT` on Clojars. The rename is cheap now and a breaking change after `0.1.0`.
 
 Found by a two-axis code review of the epic (Standards axis, hard violation).
+
+## Notes
+
+**2026-08-10T18:37:16.776854852Z**
+
+Shipped in 551f2b8. :live-metadata/:declared-metadata are now :live-provenance/:declared-provenance across the Diff, Plan, and Apply report, plus every call site in src, test, docs, and README; the ADR prose that still said 'Snapshot metadata' reads 'Snapshot provenance'. CONTEXT.md:88's _Avoid_ line is the only surviving use, which is the rule itself. Report output is byte-identical — verified by rendering drift-, plan-, and check-report on the report_test fixtures before and after (1094 bytes, cmp clean); the renderers print the labels 'live    '/'declared', never the keyword names. Suite green, clj-kondo clean.

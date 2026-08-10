@@ -16,7 +16,7 @@
             (string? x) x
             :else (u/malformed! (str "identifier must be a keyword or string: " (pr-str x))
                     {:value x}))]
-    (u/q-ident s)))
+    (u/quote-identifier s)))
 
 (def ^:private strict-types
   "The STRICT-legal column type keywords and their canonical uppercase

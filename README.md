@@ -37,8 +37,8 @@ value into the same Declaration statement vector.
 
 ## The Diff
 
-`sqlite-migrate.core/diff` compares two Snapshots and returns `{:entries [...] :live-metadata
-... :declared-metadata ...}`. Each entry is one self-contained Semantic difference:
+`sqlite-migrate.core/diff` compares two Snapshots and returns `{:entries [...] :live-provenance
+... :declared-provenance ...}`. Each entry is one self-contained Semantic difference:
 `:kind` (`:added`, `:removed`, `:changed`), `:path` addressing the object, both sides'
 verbatim sub-values under `:live`/`:declared` (stored CREATE sql included), and for
 `:changed` the set of differing fact keywords under `:facts`. Entries come out in a

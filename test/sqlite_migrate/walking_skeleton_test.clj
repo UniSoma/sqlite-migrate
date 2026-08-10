@@ -71,8 +71,8 @@
                      :sql ["CREATE TABLE b (id INTEGER PRIMARY KEY)"
                            "THIS IS NOT SQL"]}]
               :unhandled []
-              :live-metadata (meta (m/snapshot live))
-              :declared-metadata {}}
+              :live-provenance (meta (m/snapshot live))
+              :declared-provenance {}}
           ex (thrown-info (m/apply! live pl))
           data (ex-data ex)]
       (is (some? ex) "apply! must throw when a statement fails mid-apply")

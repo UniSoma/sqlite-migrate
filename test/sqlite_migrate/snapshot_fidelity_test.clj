@@ -13,7 +13,7 @@
   (with-open [conn (sql-jdbc/in-memory)]
     (m/declared-snapshot conn corpus/nasty-declaration)))
 
-(deftest structural-fidelity
+(deftest snapshot-mirrors-the-live-schemas-structure
   (let [snap (corpus-snapshot)]
     (testing "main-schema tables only — no shadow tables, no sqlite_* internals"
       (is (= #{"order" "items" "notes" "shipments"} (set (keys (:tables snap))))))
@@ -175,7 +175,7 @@
     (with-open [conn (sql-jdbc/in-memory)]
       (is (map? (m/declared-snapshot conn corpus/nasty-declaration))))))
 
-(deftest metadata-rides-equality-neutral
+(deftest provenance-rides-in-clojure-meta-without-changing-snapshot-equality
   ;; Same schema reached through different histories: the Snapshot values
   ;; are = outright; provenance (the schema_version fingerprint) lives in
   ;; Clojure meta and differs without touching the value.

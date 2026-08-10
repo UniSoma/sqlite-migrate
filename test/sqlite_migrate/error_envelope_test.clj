@@ -65,13 +65,13 @@
           (is (some? ex) "check must throw on fingerprint mismatch")
           (is (= :handled/drift-refused (dispatch ex)))
           (is (one-line? ex))
-          (is (= (get-in plan [:live-metadata :schema-version])
+          (is (= (get-in plan [:live-provenance :schema-version])
                 (:plan-fingerprint data)))
           (is (integer? (:live-fingerprint data)))
           (is (not= (:plan-fingerprint data) (:live-fingerprint data)))
-          (is (= (:live-metadata plan) (:live-metadata data))
+          (is (= (:live-provenance plan) (:live-provenance data))
             "the Plan's live Snapshot provenance rides verbatim")
-          (is (= (:declared-metadata plan) (:declared-metadata data))
+          (is (= (:declared-provenance plan) (:declared-provenance data))
             "the Plan's declared Snapshot provenance rides verbatim")))))
   (testing ":unhandled-refused carries the unhandled entries verbatim with their refusal vectors"
     (with-open [live (sql-jdbc/in-memory)]

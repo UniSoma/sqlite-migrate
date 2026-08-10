@@ -55,7 +55,7 @@ Diff/Snapshot mismatch, not bad input.
 
 `plan` also checks provenance, the pure-side sibling of the fingerprint probe
 ADR 0016 gave `apply!`: the supplied Snapshots are compared against the Diff's
-`:live-metadata`/`:declared-metadata`, `:malformed-input` on mismatch. Full-map
+`:live-provenance`/`:declared-provenance`, `:malformed-input` on mismatch. Full-map
 `=` on the live side; **`:sqlite-version` only on the declared side**, because a
 declared Snapshot's `schema_version` is the mutation counter of a throwaway
 pristine database — a false-positive surface carrying no information. Swapping
@@ -84,7 +84,7 @@ now that the live side is an argument.
 - **Keep the mid-plan throw as the only guard** — rejected: the error names an
   opts key from deep inside table routing, after arbitrary planning work, and
   only for the diffs that happen to reach that path.
-- **Compare full metadata on both sides** — rejected: the declared side's
+- **Compare full provenance on both sides** — rejected: the declared side's
   `schema_version` counts statements applied to a pristine database; two
   identical declarations realized through different statement splits differ
   there with no semantic difference at all.
@@ -103,6 +103,6 @@ now that the live side is an argument.
 - Three input-validation branches join the example-test suite (missing context,
   live-provenance mismatch, declared `:sqlite-version` mismatch). ADR 0010's
   generative budget stays on no-op, round-trip, and convergence.
-- The glossary splits **Snapshot metadata** into **Snapshot provenance** and
+- The glossary splits the single former entry into **Snapshot provenance** and
   **Stored CREATE sql**, which were only ever one entry because nothing had
   needed to talk about them separately.
