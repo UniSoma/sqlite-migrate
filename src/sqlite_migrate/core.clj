@@ -329,15 +329,15 @@
 ;; ---------------------------------------------------------------------------
 ;; Check (ADR 0008)
 
-(defn- verify-fingerprint!
-  "Throw `:drift-refused` when the live `schema_version` fingerprint no
-  longer matches `plan`'s source Snapshot metadata — the plan's SQL
+(defn- drift-refused!
+  "Throw `:drift-refused`: the live `schema_version` fingerprint no
+  longer matches `plan`'s source Snapshot metadata, so the plan's SQL
   (gate SQL included) was compiled against a schema that no longer
-  exists. No override; the remedy is re-diff, re-plan."
-  [conn plan]
-  (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])
-        live-fingerprint (current-fingerprint conn)]
-    (when (not= plan-fingerprint live-fingerprint)
+  exists. No override; the remedy is re-diff, re-plan. `cause` is the
+  lower-level exception that surfaced the drift, if there was one."
+  ([plan live-fingerprint] (drift-refused! plan live-fingerprint nil))
+  ([plan live-fingerprint cause]
+    (let [plan-fingerprint (get-in plan [:live-metadata :schema-version])]
       (throw (ex-info (str "live schema_version " live-fingerprint
                         " does not match the plan's source fingerprint "
                         plan-fingerprint)
@@ -345,28 +345,64 @@
                 :plan-fingerprint plan-fingerprint
                 :live-fingerprint live-fingerprint
                 :live-metadata (:live-metadata plan)
-                :declared-metadata (:declared-metadata plan)})))))
+                :declared-metadata (:declared-metadata plan)}
+               cause)))))
 
-(defn- run-gates
-  "Run every Gate of `plan` verbatim over `conn`'s query path and
-  return the Check result: `{:pass? bool :gates [...]}`, one result map
-  per Gate in op order — the Gate itself under `:gate`, its op's plan
-  index, `:pass?`, the sampled `:violations` count, `:more?` when the
+(defn- verify-fingerprint!
+  "Throw `:drift-refused` when `conn`'s live fingerprint no longer
+  matches `plan`'s. Read outside any transaction — the friendly
+  fast-fail; Apply's authoritative check rides the Frame's gate step
+  (ADR 0016). Surviving this is also what lets `drift-probe-sql`
+  interpolate the plan's fingerprint: past here it equals a fingerprint
+  SQLite itself just reported, so it is an integer."
+  [conn plan]
+  (let [live-fingerprint (current-fingerprint conn)]
+    (when (not= (get-in plan [:live-metadata :schema-version]) live-fingerprint)
+      (drift-refused! plan live-fingerprint))))
+
+(defn- plan-gates
+  "Every Gate of `plan` in op order, each paired with its op's plan
+  index: a vector of `[op-index gate]`."
+  [plan]
+  (vec (for [[op-index op] (map-indexed vector (:ops plan))
+             gate (:gates op)]
+         [op-index gate])))
+
+(defn- gate-result
+  "The Check result entry for `gate` (at its op's plan index) given the
+  violating `rows` its sampling SELECT returned: the Gate itself under
+  `:gate`, `:pass?`, the sampled `:violations` count, `:more?` when the
   count hit the Gate's baked limit (\"limit or more\"), and the
   violating `:sample-rows` (row order is SQLite's — outside the
   determinism contract, ADR 0008)."
-  [conn plan]
-  (let [results (vec (for [[op-index op] (map-indexed vector (:ops plan))
-                           gate (:gates op)]
-                       (let [rows (p/execute-query conn (:sql gate) [])
-                             n (count rows)]
-                         {:gate gate
-                          :op-index op-index
-                          :pass? (zero? n)
-                          :violations n
-                          :more? (= n (:limit gate))
-                          :sample-rows rows})))]
+  [op-index gate rows]
+  (let [n (count rows)]
+    {:gate gate
+     :op-index op-index
+     :pass? (zero? n)
+     :violations n
+     :more? (= n (:limit gate))
+     :sample-rows rows}))
+
+(defn- check-result
+  "Assemble the Check result `{:pass? bool :gates [...]}` from `gates`
+  (`[op-index gate]` pairs in op order) and `rows-per-gate`, the
+  violating rows each one's SELECT returned, index-aligned. The single
+  assembler behind every Check result the library hands out — a manual
+  `check`, Apply's `:gate-failed`, and Apply's report — so the three
+  agree by construction (ADR 0016)."
+  [gates rows-per-gate]
+  (let [results (mapv (fn [[op-index gate] rows] (gate-result op-index gate rows))
+                  gates rows-per-gate)]
     {:pass? (every? :pass? results) :gates results}))
+
+(defn- run-gates
+  "Run every Gate of `plan` verbatim over `conn`'s query path and
+  return the Check result — one entry per Gate in op order (see
+  `gate-result`)."
+  [conn plan]
+  (let [gates (plan-gates plan)]
+    (check-result gates (mapv #(p/execute-query conn (:sql (second %)) []) gates))))
 
 (defn check
   "Run every Gate of `plan` read-only against `conn` and return the
@@ -412,18 +448,50 @@
           [op-index op (nth (:sql op) offset)]
           (recur (inc op-index) (- offset n)))))))
 
+(defn- drift-probe-sql
+  "The gate SQL that re-reads the live fingerprint inside the Frame's
+  transaction: rows iff it drifted from `plan`'s. O(1), so it rides
+  every Apply — `:check-gates? false` skips table scans, never the
+  drift refusal (ADR 0016)."
+  [plan]
+  (str "SELECT * FROM pragma_schema_version WHERE schema_version <> "
+    (get-in plan [:live-metadata :schema-version])))
+
+(defn- gates-violated!
+  "Translate the executor's `:gates-violated` payload into the public
+  refusal. `gate-results` is index-aligned with the `gate-sqls` Apply
+  passed: index 0 is the drift probe, whose rows mean `:drift-refused`
+  and take precedence — gate SQL compiled against a dead schema answers
+  about a database that no longer exists. Otherwise the remaining
+  indexes zip back onto `gates` as the same Check result a manual
+  `check` returns, carried by `:gate-failed` under `:check`. The
+  executor's exception rides both throws as the cause."
+  [plan gates gate-results cause]
+  (let [[drift-rows & gate-rows] gate-results]
+    (if (seq drift-rows)
+      (drift-refused! plan (:schema_version (first drift-rows)) cause)
+      (let [result (check-result gates gate-rows)
+            n (count (remove :pass? (:gates result)))]
+        (throw (ex-info (str n " of " (count (:gates result))
+                          " gates failed; nothing was applied")
+                 {:sqlite-migrate/error :gate-failed
+                  :check result}
+                 cause))))))
+
 (defn apply!
   "Execute `plan` on `conn` inside the executor-owned Frame — a dumb fold
   over the ops in plan order, all-or-nothing. Refuses (`:drift-refused`,
   no override) when the live `schema_version` fingerprint no longer
-  matches the Plan's source Snapshot metadata; refuses
-  (`:unhandled-refused`) when the Plan has unhandled entries and
+  matches the Plan's source Snapshot metadata — re-read inside the
+  Frame's transaction, so the refusal has no drift window (ADR 0016);
+  refuses (`:unhandled-refused`) when the Plan has unhandled entries and
   `:allow-unhandled?` is not set. By default every Gate is checked
   up-front once the Frame's transaction is open (TOCTOU-free — ADR
   0008); a failing Gate rolls back and throws `:gate-failed` carrying
   the Check result verbatim under `:check`. `:check-gates? false` opts
-  out (ADR 0011) — for the operator who just ran `check` and wants to
-  skip a second full scan. A mid-apply SQLite failure throws
+  out of the Gates (ADR 0011) — for the operator who just ran `check`
+  and wants to skip a second full scan; the drift refusal stands
+  either way. A mid-apply SQLite failure throws
   `:sqlite-error` carrying the failing Op verbatim, its plan index
   (`:op-index`), and the specific SQL statement that failed. Returns a
   minimal Apply report — the Check result rides it under `:check`,
@@ -439,27 +507,19 @@
                   :unhandled (:unhandled plan)}))))
     (verify-fingerprint! conn plan)
     (let [check-gates? (not (false? (:check-gates? opts)))
-          checked (volatile! nil)
-          pre-check! (when check-gates?
-                       (fn []
-                         (let [result (run-gates conn plan)]
-                           (vreset! checked result)
-                           (when-not (:pass? result)
-                             (let [n (count (remove :pass? (:gates result)))]
-                               (throw (ex-info (str n " of " (count (:gates result))
-                                                 " gates failed; nothing was applied")
-                                        {:sqlite-migrate/error :gate-failed
-                                         :check result})))))))
+          gates (if check-gates? (plan-gates plan) [])
+          gate-sqls (into [(drift-probe-sql plan)] (map (comp :sql second)) gates)
           statements (into [] (mapcat :sql) (:ops plan))]
       (try
-        (if pre-check!
-          (p/execute-batch! conn statements pre-check!)
-          (p/execute-batch! conn statements))
+        (p/execute-batch! conn statements gate-sqls)
         (catch Exception e
           (let [data (ex-data e)
                 located (when-let [i (:statement-index data)]
                           (op-at-batch-index (:ops plan) i))]
             (cond
+              (= :gates-violated (:sqlite-migrate/error data))
+              (gates-violated! plan gates (:gate-results data) e)
+
               located
               (let [[op-index op statement] located]
                 (throw (ex-info (str "SQLite error during apply — op " op-index
@@ -479,4 +539,6 @@
                        e))))))
       (cond-> (assoc (select-keys plan [:live-metadata :declared-metadata :ops])
                 :schema-version (current-fingerprint conn))
-        check-gates? (assoc :check @checked)))))
+        check-gates? (assoc :check
+                       ;; the Frame threw on any row, so every Gate passed
+                       (check-result gates (repeat (count gates) [])))))))

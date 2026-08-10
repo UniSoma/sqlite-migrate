@@ -1,20 +1,21 @@
 ---
 id: sqm-01kzmhxh9ev5
 title: 'Implement ADR 0016: gate-sqls arity replaces the pre-check! callback'
-status: open
+status: closed
 type: task
 priority: 2
 mode: afk
 created: '2026-08-10T00:42:15.726585917Z'
-updated: '2026-08-10T01:44:41.012345742Z'
+updated: '2026-08-10T11:48:02.759236597Z'
+closed: '2026-08-10T11:48:02.759236597Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
 - title: 'A decision is recorded (ADR 0013 amendment or new ADR): either the pre-check! arity is granted or the protocol returns to exactly two ops'
   done: true
 - title: Protocol docstrings (the normative adapter-author spec) match the decision
-  done: false
+  done: true
 - title: Code and tests conform to the decision; bb test passes
-  done: false
+  done: true
 ---
 
 ## Description
@@ -36,3 +37,7 @@ Verify with `bb test` (redirect output to a file, check exit code) and `clj-kond
 **2026-08-10T01:44:41.012345742Z**
 
 Grilling session settled all branches: Option C (gate SQL as data), new ADR 0016 amending 0013+0008, run-all gate semantics with :gates-violated executor payload, fingerprint probe prepended at index 0 (always, even with :check-gates? false, index-0 failure => :drift-refused with precedence), two arities kept, 'pre-check' vocabulary survives. Decision recorded; ticket rewritten as an afk implementation spec.
+
+**2026-08-10T11:48:02.759236597Z**
+
+Shipped in 70e2736. execute-batch! arities are now [conn statements] / [conn statements gate-sqls]; Frame step 4 runs every gate SQL inside the open transaction and throws :gates-violated with index-aligned results. apply! always calls the 3-arity with the O(1) fingerprint probe at index 0 (present under :check-gates? false too, and outranking gate rows). One check-result assembler backs check, :gate-failed, and the Apply report. New Frame-level tests in jdbc_frame_test plus a drifting-executor test pinning the closed drift window. bb test 149/781 green, clj-kondo clean.

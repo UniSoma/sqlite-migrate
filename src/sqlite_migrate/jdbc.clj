@@ -23,18 +23,31 @@
   [^Connection connection]
   (= 1 (-> (query connection "PRAGMA foreign_keys" []) first :foreign_keys)))
 
+(defn- check-gates!
+  "Frame step 4: run every one of `gate-sqls` inside the open
+  transaction — all of them, never fail-fast — and throw
+  `:gates-violated` with the index-aligned results when any returned
+  rows."
+  [^Connection connection gate-sqls]
+  (let [results (mapv #(vec (query connection % [])) gate-sqls)]
+    (when (some seq results)
+      (throw (ex-info (str (count (filter seq results)) " of " (count results)
+                        " gate queries returned rows")
+               {:sqlite-migrate/error :gates-violated
+                :gate-results results})))))
+
 (defn- run-frame!
   "The unconditional Frame of `execute-batch!` (see the protocol docstring):
-  FK enforcement off outside the transaction, BEGIN, `pre-check!` (when
-  supplied) inside the open transaction, statements in order,
-  foreign_key_check, COMMIT, prior FK setting restored in a finally."
-  [^Connection connection statements pre-check!]
+  FK enforcement off outside the transaction, BEGIN, the `gate-sqls`
+  inside the open transaction, statements in order, foreign_key_check,
+  COMMIT, prior FK setting restored in a finally."
+  [^Connection connection statements gate-sqls]
   (let [fk-was-on? (foreign-keys-on? connection)]
     (raw-exec! connection "PRAGMA foreign_keys=OFF")
     (try
       (raw-exec! connection "BEGIN")
       (try
-        (when pre-check! (pre-check!))
+        (check-gates! connection gate-sqls)
         (doseq [[i s] (map-indexed vector statements)]
           (try
             (raw-exec! connection s)
@@ -64,9 +77,9 @@
   (execute-query [_ sql params]
     (query connection sql params))
   (execute-batch! [_ statements]
-    (run-frame! connection statements nil))
-  (execute-batch! [_ statements pre-check!]
-    (run-frame! connection statements pre-check!))
+    (run-frame! connection statements []))
+  (execute-batch! [_ statements gate-sqls]
+    (run-frame! connection statements gate-sqls))
   java.io.Closeable
   (close [_]
     (.close connection)))

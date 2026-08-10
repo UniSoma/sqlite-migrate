@@ -88,7 +88,11 @@ Four namespaces (ADR 0013/0014); everything else lives under
 | EDN schema sugar | `sqlite-migrate.schema` |
 
 Adapter authors implement the two-op `SQLiteExecutor` protocol in
-`sqlite-migrate.protocols`; its docstrings are the normative contract.
+`sqlite-migrate.protocols`: `execute-query [conn sql params]` and
+`execute-batch! [conn statements] [conn statements gate-sqls]`, where
+`gate-sqls` is a vector of caller-compiled read-only SELECTs the Frame
+runs inside its open transaction — all of them, any rows meaning
+rollback (ADR 0016). Its docstrings are the normative contract.
 
 ## Where the details live
 

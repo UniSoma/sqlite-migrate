@@ -443,7 +443,11 @@
           (is (false? (:pass? result)))
           (is (= [[:not-null 1]]
                 (mapv (juxt (comp :code :gate) :violations) (:gates result))))
-          (is (= [{:a 2 :b nil}] (:sample-rows (first (:gates result)))))))
+          (is (= [{:a 2 :b nil}] (:sample-rows (first (:gates result)))))
+          (is (= result (m/check live pl))
+            "byte-for-byte what a manual check returns — the parity the run-all gate step exists for"))
+        (testing "the executor's :gates-violated exception rides as the cause"
+          (is (= :gates-violated (:sqlite-migrate/error (ex-data (ex-cause ex)))))))
       (testing "nothing was applied — schema and rows survive the rollback"
         (is (= before (m/snapshot live)))
         (is (= [{:a 1 :b "x"} {:a 2 :b nil}]
@@ -461,6 +465,41 @@
         "with gates skipped the raw SQLite failure surfaces instead")
       (is (= [{:a 1 :b nil}] (p/execute-query live "SELECT a, b FROM t" []))
         "the Frame still rolled everything back"))))
+
+(defn- drifting-executor
+  "An executor that delegates everything to `conn` but drifts the live
+  schema between `apply!`'s outside-Frame fingerprint read and the
+  Frame's BEGIN — the exact window ADR 0016's index-0 gate closed.
+  Nothing else can force that window open, and only real SQLite is
+  behind it. It implements the gate-sqls arity alone, so an `apply!`
+  that reached for the two-argument arity would fail loudly."
+  [conn]
+  (reify p/SQLiteExecutor
+    (execute-query [_ sql params]
+      (p/execute-query conn sql params))
+    (execute-batch! [_ statements gate-sqls]
+      (p/execute-batch! conn ["CREATE TABLE drifted (x INTEGER)"])
+      (p/execute-batch! conn statements gate-sqls))))
+
+(deftest apply-refuses-drift-that-lands-after-the-outside-frame-check
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live
+      ["CREATE TABLE t (a INTEGER, b TEXT)"
+       "INSERT INTO t (a, b) VALUES (1, NULL)"])
+    (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
+          refusal (fn [opts]
+                    (ex-data (try (m/apply! (drifting-executor live) pl opts)
+                               nil (catch Exception e e))))]
+      (testing "the in-Frame fingerprint probe rides :check-gates? false too"
+        (let [data (refusal {:check-gates? false})]
+          (is (= :drift-refused (:sqlite-migrate/error data)))
+          (is (= (get-in pl [:live-metadata :schema-version])
+                (:plan-fingerprint data)))
+          (is (integer? (:live-fingerprint data)))
+          (is (not= (:plan-fingerprint data) (:live-fingerprint data)))))
+      (testing "drift outranks the violating gate rows alongside it"
+        (is (= :drift-refused (:sqlite-migrate/error (refusal {})))
+          "gate SQL compiled against a dead schema answers about nothing")))))
 
 (deftest apply-report-carries-the-check-result
   (with-open [live (sql-jdbc/in-memory)]
