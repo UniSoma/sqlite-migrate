@@ -4,7 +4,7 @@
 
 - **Local git only — no remote, no ssh.** No AI attribution in commit messages or trailers.
 - **Test before commit.** `bb test` runs the full suite; a single namespace runs with `clojure -X:test :nses '[sqlite-migrate.foo-test]'`. Redirect output to a file and check the exit code — `| tail` hides mid-run failures and truncated runs.
-- **Lint before commit.** `clj-kondo --lint src test`.
+- **Lint before commit.** `clj-kondo --lint src test ci` — `ci/smoke/smoke.clj` calls the public API, so linting it catches signature drift that only the native-image job would otherwise surface.
 - **Drive the REPL instead of write-run-debug cycles.** Use the `clojure-mcp` tools, not Bash. The REPL is already running on port 7888 — probe it by evaluating `(+ 1 1)`; only a failed probe warrants `bb pre_start`.
 - **Re-read a `.clj*` file after every Edit/Write.** A PostToolUse hook reformats it underneath you, and stale line numbers cause bad edits.
 - **Tickets only through the `knot` CLI** (`.tickets/`, prefix `sqm`) — never read or edit those files directly. `knot update --body` replaces a whole ticket body; `--description` replaces only the `## Description` section.

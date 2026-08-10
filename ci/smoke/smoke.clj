@@ -16,8 +16,7 @@
       (let [live-snap (m/snapshot live)
             declared-snap (m/declared-snapshot pristine declaration)
             diff (m/diff live-snap declared-snap)
-            plan (m/plan diff {:live-snapshot live-snap
-                               :declared-snapshot declared-snap})]
+            plan (m/plan live-snap declared-snap diff)]
         (m/apply! live plan)
         (when (m/drift? (m/diff (m/snapshot live) declared-snap))
           (throw (ex-info "smoke: live schema still drifts after apply!"
