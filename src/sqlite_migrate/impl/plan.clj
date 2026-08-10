@@ -444,6 +444,43 @@
     {:views dep-views
      :triggers (vec (concat loose-view-triggers loose-table-triggers))}))
 
+(defn- rebuild-stage-sqls
+  "The rebuild's staging statements: create the declared shape under
+  `temp`, INSERT...SELECT copy, and — when both sides autoincrement —
+  restore the AUTOINCREMENT counter."
+  [temp live-table declared-table renames]
+  (let [autoincrement? (and (:autoincrement? live-table) (:autoincrement? declared-table))]
+    (-> [(create-sql-under-temp-name (:sql (meta declared-table)) temp)]
+      (into (keep identity [(rebuild-copy-sql temp live-table declared-table renames)]))
+      (into (when autoincrement?
+              (sequence-restore-sqls temp (:name live-table)))))))
+
+(defn- rebuild-swap-sqls
+  "The rebuild's swap statements: drop the dependents that would break
+  the rename, drop the old table, rename the staged table into place —
+  never rename-first."
+  [temp live-table declared-table deps]
+  (-> []
+    (into (map #(str "DROP VIEW " (u/q-ident (:name %)))) (:views deps))
+    (into (map #(str "DROP TRIGGER " (u/q-ident (:name %)))) (:triggers deps))
+    (conj (str "DROP TABLE " (u/q-ident (:name live-table))))
+    (conj (str "ALTER TABLE " (u/q-ident temp)
+            " RENAME TO " (u/q-ident (:name declared-table))))))
+
+(defn- rebuild-recreate-sqls
+  "The rebuild's recreate statements: the declared table's indexes and
+  triggers, then the dropped dependent views (each with its triggers)
+  and standalone dependent triggers."
+  [declared-table deps]
+  (-> []
+    (into (for [[_ idx] (sort-by key (:indexes declared-table))]
+            (:sql (meta idx))))
+    (into (for [[_ trg] (sort-by key (:triggers declared-table))]
+            (:sql (meta trg))))
+    (into (mapcat (fn [v] (cons (:sql v) (map :sql (:triggers v)))))
+      (:views deps))
+    (into (map :sql) (:triggers deps))))
+
 (defn- rebuild-table-op
   "The composite :rebuild-table op for one changed table — SQLite's
   generalized 12-step ALTER TABLE compiled wholly at plan time, one op
@@ -456,24 +493,10 @@
   [opts tname serves live-table declared-table renames]
   (let [tfold (x/fold-name tname)
         temp (temp-rebuild-name opts (:name declared-table))
-        autoincrement? (and (:autoincrement? live-table) (:autoincrement? declared-table))
         deps (rebuild-dependents (:surviving-dependents opts) tfold)
-        sql (-> [(create-sql-under-temp-name (:sql (meta declared-table)) temp)]
-              (into (keep identity [(rebuild-copy-sql temp live-table declared-table renames)]))
-              (into (when autoincrement?
-                      (sequence-restore-sqls temp (:name live-table))))
-              (into (map #(str "DROP VIEW " (u/q-ident (:name %)))) (:views deps))
-              (into (map #(str "DROP TRIGGER " (u/q-ident (:name %)))) (:triggers deps))
-              (conj (str "DROP TABLE " (u/q-ident (:name live-table))))
-              (conj (str "ALTER TABLE " (u/q-ident temp)
-                      " RENAME TO " (u/q-ident (:name declared-table))))
-              (into (for [[_ idx] (sort-by key (:indexes declared-table))]
-                      (:sql (meta idx))))
-              (into (for [[_ trg] (sort-by key (:triggers declared-table))]
-                      (:sql (meta trg))))
-              (into (mapcat (fn [v] (cons (:sql v) (map :sql (:triggers v)))))
-                (:views deps))
-              (into (map :sql) (:triggers deps)))]
+        sql (-> (rebuild-stage-sqls temp live-table declared-table renames)
+              (into (rebuild-swap-sqls temp live-table declared-table deps))
+              (into (rebuild-recreate-sqls declared-table deps)))]
     (op [3 tfold] :rebuild-table [:table tname] serves sql)))
 
 ;; ---------------------------------------------------------------------------
