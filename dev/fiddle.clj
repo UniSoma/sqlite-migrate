@@ -39,10 +39,7 @@
 
     (def diff (migrate/diff live target))
 
-    (def plan
-      (migrate/plan diff
-        {:live-snapshot live
-         :declared-snapshot target})))
+    (def plan (migrate/plan live target diff)))
 
   (migrate/drift? diff)
 
