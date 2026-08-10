@@ -7,6 +7,7 @@
   `sqlite-migrate.corpus` run as plain deftests alongside."
   (:require [clojure.string :as str]
     [clojure.test :refer [deftest is testing]]
+    [clojure.test.check :as tc]
     [clojure.test.check.clojure-test :refer [defspec]]
     [clojure.test.check.properties :as prop]
     [sqlite-migrate.core :as m]
@@ -137,14 +138,22 @@
 ;; Properties 1 and 2 (ADR 0003 via ADR 0010): no-op and round-trip
 
 (defspec no-op-property trials
-  (prop/for-all [s g/gen-schema]
-    (let [a (snap-of s)
-          b (snap-of s)
+  (prop/for-all [scenario g/gen-rowless-scenario]
+    (let [a (snap-of (:live scenario))
+          b (snap-of (:live scenario))
           d (m/diff a b)
-          plan (m/plan a b d)]
+          plan (m/plan a b d)
+          ;; forward arm: every mutation kind is a Semantic difference
+          ;; (ADR 0003), so a target one perturbation away must drift
+          forward (m/diff a (snap-of (:target scenario)))
+          named (g/mutated-table-names scenario)]
       (and (not (m/drift? d))
         (empty? (:ops plan))
-        (empty? (:unhandled plan))))))
+        (empty? (:unhandled plan))
+        (m/drift? forward)
+        (every? (fn [{[object nm] :path}]
+                  (and (= :table object) (contains? named (g/fold nm))))
+          (:entries forward))))))
 
 (defspec round-trip-property trials
   (prop/for-all [s g/gen-schema]
@@ -153,40 +162,78 @@
       (not (m/drift? (m/diff a b))))))
 
 ;; ---------------------------------------------------------------------------
+;; Properties that assert only past a passing Check
+;;
+;; Skipping a trial whose Check fails is defensible — the Plan never
+;; runs, so there is nothing to assert about its effect — but ADR 0010
+;; states these properties unconditionally, and a run that skipped
+;; nearly every trial is vacuous rather than passing. `defspec` offers
+;; no after-hook and `clojure.test` does not order vars, so each of
+;; these three drives quick-check from a plain `deftest` that tallies
+;; the split during the run and asserts the floor beside the result.
+
+(def ^:private reach-floor
+  "The fewest trials that may reach a gated property's assertions
+  before the run counts as vacuous — a quarter of the configured trial
+  count, so raising SQM_TRIALS raises the floor with it. Measured at 60
+  sampled scenarios, 7 skip on a failing Check, so the floor has wide
+  margin over the generator's real skip rate."
+  (quot trials 4))
+
+(defn- gated-property
+  "Run `trials` trials of a property named `label` whose assertions are
+  reachable only past a passing Check: `f` is called with the scenario
+  and the `run-trial` context on every reaching trial and must return
+  truthy. Reports the reached/skipped split, then asserts both the
+  quick-check result and that at least `reach-floor` trials reached
+  `f`. Shrink replays count too, which matters only on a run already
+  failing its first assertion."
+  [label f]
+  (let [reached (atom 0)
+        skipped (atom 0)
+        result (tc/quick-check trials
+                 (prop/for-all [scenario g/gen-scenario]
+                   (run-trial scenario
+                     (fn [{:keys [check] :as context}]
+                       (if (:pass? check)
+                         (do (swap! reached inc) (f scenario context))
+                         (do (swap! skipped inc) true))))))]
+    (println (format "%s: %d trials reached the assertions, %d skipped on a failing Check"
+               label @reached @skipped))
+    (is (:pass? result) (str label " must hold on every reaching trial: " (pr-str result)))
+    (is (<= reach-floor @reached)
+      (str label " reached its assertions on " @reached " trials, under the floor of "
+        reach-floor " — the run is vacuous, not passing"))))
+
+;; ---------------------------------------------------------------------------
 ;; Property: residual convergence — the post-Apply diff equals exactly
 ;; the Plan's unhandled entries
 
-(defspec residual-convergence-property trials
-  (prop/for-all [scenario g/gen-scenario]
-    (run-trial scenario
-      (fn [{:keys [conn plan check declared]}]
-        (if-not (:pass? check)
-          true
-          (do (m/apply! conn plan {:allow-unhandled? true})
-            (= (:entries (m/diff (m/snapshot conn) declared))
-              (mapv :entry (:unhandled plan)))))))))
+(deftest residual-convergence-property
+  (gated-property "residual convergence"
+    (fn [_scenario {:keys [conn plan declared]}]
+      (m/apply! conn plan {:allow-unhandled? true})
+      (= (:entries (m/diff (m/snapshot conn) declared))
+        (mapv :entry (:unhandled plan))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Property: data preservation — multiset row equality over surviving
 ;; columns, rowid stability and AUTOINCREMENT continuity riding along
 
-(defspec data-preservation-property trials
-  (prop/for-all [scenario g/gen-scenario]
-    (run-trial scenario
-      (fn [{:keys [conn plan check]}]
-        (if-not (:pass? check)
-          true
-          (let [survs (survivors scenario)
-                pre (into {}
-                      (for [{:keys [live-table cols rowid?]} survs]
-                        [(g/fold live-table)
-                         (rows-at conn live-table (map first cols) rowid?)]))]
-            (m/apply! conn plan {:allow-unhandled? true})
-            (and (every? (fn [{:keys [live-table post-table cols rowid?]}]
-                           (= (get pre (g/fold live-table))
-                             (rows-at conn post-table (map second cols) rowid?)))
-                   survs)
-              (autoincrement-continuity-ok? scenario conn plan))))))))
+(deftest data-preservation-property
+  (gated-property "data preservation"
+    (fn [scenario {:keys [conn plan]}]
+      (let [survs (survivors scenario)
+            pre (into {}
+                  (for [{:keys [live-table cols rowid?]} survs]
+                    [(g/fold live-table)
+                     (rows-at conn live-table (map first cols) rowid?)]))]
+        (m/apply! conn plan {:allow-unhandled? true})
+        (and (every? (fn [{:keys [live-table post-table cols rowid?]}]
+                       (= (get pre (g/fold live-table))
+                         (rows-at conn post-table (map second cols) rowid?)))
+               survs)
+          (autoincrement-continuity-ok? scenario conn plan))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Property: gate bidirectionality — Check is a predicate, not advice
@@ -226,12 +273,10 @@
 ;; Property: version honesty — the Plan compiled for the current SQLite
 ;; version executes successfully on it (the cross-version matrix is CI's)
 
-(defspec version-honesty-property trials
-  (prop/for-all [scenario g/gen-scenario]
-    (run-trial scenario
-      (fn [{:keys [conn plan check]}]
-        (or (not (:pass? check))
-          (some? (:schema-version (m/apply! conn plan {:allow-unhandled? true}))))))))
+(deftest version-honesty-property
+  (gated-property "version honesty"
+    (fn [_scenario {:keys [conn plan]}]
+      (some? (:schema-version (m/apply! conn plan {:allow-unhandled? true}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Deterministic corpus seeds (the fourth generator, plain deftests)

@@ -648,10 +648,23 @@
          :counts (update-vals per-table :count)
          :auto-highs (into {} (for [[k v] per-table :when (:auto-high v)] [k (:auto-high v)]))}))))
 
+(def gen-rowless-scenario
+  "A scenario without its row load: a live Schema and a mutation into a
+  nearby target, Directives riding along. Properties that never realize
+  rows take this one."
+  (gen/bind gen-schema gen-mutation))
+
+(defn mutated-table-names
+  "The folded table names `scenario`'s mutation can put in a Diff
+  entry's path: the mutated table, plus its post-rename spelling when
+  the mutation renames the table."
+  [{:keys [mutation table-rename]}]
+  (cond-> #{(fold (:table mutation))}
+    table-rename (conj (fold (second table-rename)))))
+
 (def gen-scenario
-  "A full generative trial: live Schema, mutation into a nearby target
-  (Directives riding along), and the live row load."
-  (gen/let [live gen-schema
-            scenario (gen-mutation live)
+  "A full generative trial: a `gen-rowless-scenario` plus the live row
+  load its live Schema and mutation call for."
+  (gen/let [scenario gen-rowless-scenario
             rows (gen-rows scenario)]
     (gen/return (assoc scenario :rows rows))))
