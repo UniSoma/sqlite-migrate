@@ -26,8 +26,7 @@
   ([live-decl declared-decl opts]
     (let [live (snap live-decl)
           declared (snap declared-decl)]
-      (m/plan (m/diff live declared)
-        (merge {:live-snapshot live :declared-snapshot declared} opts)))))
+      (m/plan live declared (m/diff live declared) opts))))
 
 (defn- gates-of
   "Every Gate in the Plan as `[op-kind gate]` pairs, in op order."
@@ -375,8 +374,7 @@
   (with-open [pristine (sql-jdbc/in-memory)]
     (let [live-snap (m/snapshot live)
           declared (m/declared-snapshot pristine declared-decl)]
-      (m/plan (m/diff live-snap declared)
-        {:live-snapshot live-snap :declared-snapshot declared}))))
+      (m/plan live-snap declared (m/diff live-snap declared)))))
 
 (deftest check-reports-pass-and-fail-per-gate
   (with-open [live (sql-jdbc/in-memory)]

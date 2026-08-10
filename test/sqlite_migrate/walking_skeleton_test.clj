@@ -15,10 +15,11 @@
   (with-open [live (sql-jdbc/in-memory)
               pristine (sql-jdbc/in-memory)]
     (let [declared (m/declared-snapshot pristine declaration)
-          d (m/diff (m/snapshot live) declared)]
+          live-snap (m/snapshot live)
+          d (m/diff live-snap declared)]
       (testing "an empty live database drifts from a non-empty Declaration"
         (is (m/drift? d)))
-      (let [pl (m/plan d)]
+      (let [pl (m/plan live-snap declared d)]
         (testing "the Plan carries :create-table ops with plan-time :sql and :serves"
           (is (= [:create-table :create-table] (mapv :kind (:ops pl))))
           (is (= [[:table "posts"] [:table "users"]] (mapv :path (:ops pl))))
@@ -38,8 +39,9 @@
     (try
       (with-open [live (sql-jdbc/connect (.getPath f))
                   pristine (sql-jdbc/in-memory)]
-        (let [declared (m/declared-snapshot pristine declaration)]
-          (m/apply! live (m/plan (m/diff (m/snapshot live) declared)))
+        (let [declared (m/declared-snapshot pristine declaration)
+              live-snap (m/snapshot live)]
+          (m/apply! live (m/plan live-snap declared (m/diff live-snap declared)))
           (is (not (m/drift? (m/diff (m/snapshot live) declared))))))
       (finally (.delete f)))))
 
@@ -47,7 +49,8 @@
   (with-open [live (sql-jdbc/in-memory)
               pristine (sql-jdbc/in-memory)]
     (let [declared (m/declared-snapshot pristine declaration)
-          pl (m/plan (m/diff (m/snapshot live) declared))]
+          live-snap (m/snapshot live)
+          pl (m/plan live-snap declared (m/diff live-snap declared))]
       ;; live schema changes after the Plan was computed
       (p/execute-batch! live ["CREATE TABLE intruder (id INTEGER PRIMARY KEY)"])
       (let [ex (thrown-info (m/apply! live pl))]

@@ -315,7 +315,7 @@
 
 (defn diff
   "Compare two Snapshots `(live, declared)` into a Diff: a flat
-  `:entries` vector plus both sides' Snapshot metadata (ADR 0004).
+  `:entries` vector plus both sides' Snapshot provenance (ADR 0004).
 
   Each entry is one self-contained Semantic difference: a
   target-relative `:kind` (`:added` = declared-only, `:removed` =

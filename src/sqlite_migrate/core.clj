@@ -248,7 +248,7 @@
 
 (defn diff
   "Compare two Snapshots (live, declared) into a Diff: a flat `:entries`
-  vector plus both sides' Snapshot metadata. Each entry is one
+  vector plus both sides' Snapshot provenance. Each entry is one
   self-contained Semantic difference — target-relative `:kind`
   (:added/:removed/:changed), `:path`, both sides' verbatim sub-values
   with stored CREATE sql embedded, and for :changed the `:facts` set —
@@ -293,24 +293,26 @@
 ;; Plan
 
 (defn plan
-  "Plan a Diff into an ordered, self-contained Plan: `{:ops [...]
-  :unhandled [...] :live-metadata ... :declared-metadata ...
-  :capabilities ... :directives [...] :unused-directives [...]}` —
-  list position is execution order, every Diff entry either served by
-  ≥1 op or honestly unhandled with its full Refusal vector,
-  byte-identical for identical inputs. Opts: `:capabilities`
-  (defaults: the live Snapshot's SQLite version plus `:rebuild?
-  true`), `:directives` (the intent channel, ADR 0009 — per-object
-  Directive maps that lift `:needs-intent` refusals: `:rename-table`,
-  `:rename-column`, `:drop-table`, `:drop-column`; a conflicting set
-  throws `:malformed-input`, an unmatched directive is inert and
-  reported under `:unused-directives` in input order, and apply! never
-  consults them), and `:live-snapshot`/`:declared-snapshot` (required
-  planning context whenever the Diff contains a changed table). See
-  `sqlite-migrate.impl.plan/plan` for the full contract (ADR 0006,
-  0007, 0009)."
-  ([diff] (plan diff {}))
-  ([diff opts] (pl/plan diff opts)))
+  "Plan `diff` — computed from Snapshots `live` and `declared`, which
+  are required planning context, not options (ADR 0017) — into an
+  ordered, self-contained Plan: `{:ops [...] :unhandled [...]
+  :live-metadata ... :declared-metadata ... :capabilities ...
+  :directives [...] :unused-directives [...]}` — list position is
+  execution order, every Diff entry either served by ≥1 op or honestly
+  unhandled with its full Refusal vector, byte-identical for identical
+  inputs. A missing or non-Snapshot argument, and a Snapshot whose
+  provenance is not the Diff's, each throw `:malformed-input` before
+  any planning. Opts: `:capabilities` (defaults: the live Snapshot's
+  SQLite version plus `:rebuild? true`) and `:directives` (the intent
+  channel, ADR 0009 — per-object Directive maps that lift
+  `:needs-intent` refusals: `:rename-table`, `:rename-column`,
+  `:drop-table`, `:drop-column`; a conflicting set throws
+  `:malformed-input`, an unmatched directive is inert and reported
+  under `:unused-directives` in input order, and apply! never consults
+  them). See `sqlite-migrate.impl.plan/plan` for the full contract
+  (ADR 0006, 0007, 0009)."
+  ([live declared diff] (plan live declared diff {}))
+  ([live declared diff opts] (pl/plan live declared diff opts)))
 
 (defn plan-report
   "Render `plan` into a deterministic plain-text plan report — the
@@ -331,7 +333,7 @@
 
 (defn- drift-refused!
   "Throw `:drift-refused`: the live `schema_version` fingerprint no
-  longer matches `plan`'s source Snapshot metadata, so the plan's SQL
+  longer matches `plan`'s source Snapshot provenance, so the plan's SQL
   (gate SQL included) was compiled against a schema that no longer
   exists. No override; the remedy is re-diff, re-plan. `cause` is the
   lower-level exception that surfaced the drift, if there was one."
@@ -414,7 +416,7 @@
   the violating `:sample-rows` (row order is SQLite's — outside the
   determinism contract). Refuses (`:drift-refused`, no override) when the
   live `schema_version` fingerprint no longer matches the Plan's
-  source Snapshot metadata. Never mutates the database; SQLite's own
+  source Snapshot provenance. Never mutates the database; SQLite's own
   enforcement remains the backstop."
   [conn plan]
   (verify-fingerprint! conn plan)
@@ -482,7 +484,7 @@
   "Execute `plan` on `conn` inside the executor-owned Frame — a dumb fold
   over the ops in plan order, all-or-nothing. Refuses (`:drift-refused`,
   no override) when the live `schema_version` fingerprint no longer
-  matches the Plan's source Snapshot metadata — re-read inside the
+  matches the Plan's source Snapshot provenance — re-read inside the
   Frame's transaction, so the refusal has no drift window (ADR 0016);
   refuses (`:unhandled-refused`) when the Plan has unhandled entries and
   `:allow-unhandled?` is not set. By default every Gate is checked

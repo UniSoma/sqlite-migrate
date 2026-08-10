@@ -522,10 +522,10 @@
   rename, drop the old table, rename the new one into place — never
   rename-first — then recreate the declared indexes and triggers and
   the dropped dependents."
-  [opts tname serves live-table declared-table renames]
+  [pctx tname serves live-table declared-table renames]
   (let [tfold (x/fold-name tname)
-        temp (temp-rebuild-name opts (:name declared-table))
-        deps (rebuild-dependents (:surviving-dependents opts) tfold)
+        temp (temp-rebuild-name pctx (:name declared-table))
+        deps (rebuild-dependents (:surviving-dependents pctx) tfold)
         sql (-> (rebuild-stage-sqls temp live-table declared-table renames)
               (into (rebuild-swap-sqls temp live-table declared-table deps))
               (into (rebuild-recreate-sqls declared-table deps)))]
@@ -989,16 +989,18 @@
 ;; Changed-table planning (fine-grained entries, ADR 0006 selection rule)
 
 (defn- table-context
-  "The live and declared table values for a changed table, from the
-  Snapshots supplied in opts. Planning a changed table without them is
-  malformed input."
+  "The live or declared table value for a changed table, from the
+  Snapshot `plan` was given. Past `plan`'s entry guard both Snapshots
+  are present and Snapshot-shaped (ADR 0017), so a table the Diff
+  speaks of and the Snapshot lacks is a Diff/Snapshot mismatch — a bug
+  in whoever paired them, not malformed input the caller can fix."
   [snapshot side tname]
   (or (some (fn [[k v]] (when (= (x/fold-name k) (x/fold-name tname)) v))
         (:tables snapshot))
-    (throw (ex-info (str "planning changed table " tname " requires the "
-                      (name side) " Snapshot in opts")
-             {:sqlite-migrate/error :malformed-input
-              :missing (case side :live :live-snapshot :declared-snapshot)
+    (throw (ex-info (str "the " (name side) " Snapshot has no table " tname
+                      ", which this Diff says changed")
+             {:sqlite-migrate/error :internal
+              :side side
               :table tname}))))
 
 (defn- entry-what
@@ -1291,7 +1293,7 @@
   op serves both whole-table entries, and every refusal rides on both.
   Returns `{:ops [...] :unhandled {entry refusals} :used
   [directives]}`."
-  [capabilities opts dctx tname entries live-table declared-table fused]
+  [capabilities pctx dctx tname entries live-table declared-table fused]
   (let [lt-fold (x/fold-name (:name live-table))
         serves-pair (when fused #{(:path (:removed fused)) (:path (:added fused))})
         {:keys [units rename-directives rename-map collision?]}
@@ -1309,14 +1311,14 @@
                (into (keep (fn [[f dv]] (when (contains? removed-folds f) dv)))
                  authorized))
         ctx (assoc (changed-table-ctx capabilities (mapv :entry units) live-table declared-table)
-              :surviving-sqls (:surviving-sqls opts)
+              :surviving-sqls (:surviving-sqls pctx)
               :rename-collision? collision?
               :authorized-col-drops (set (keys authorized)))
         gctx {:live-table live-table
               :declared-table declared-table
               :rename-map rename-map
-              :live-snapshot (:live-snapshot opts)
-              :declared-snapshot (:declared-snapshot opts)}
+              :live-snapshot (:live-snapshot pctx)
+              :declared-snapshot (:declared-snapshot pctx)}
         routed (mapv (fn [u] (assoc u :route (route-table-entry capabilities tname ctx (:entry u))))
                  units)
         collapse? (boolean (some #(contains? (:route %) :rebuild) routed))
@@ -1377,7 +1379,7 @@
                                                (:needs-intent route) blockers))))
                             routed))}
             {:ops [(let [gates (into [] (mapcat #(entry-gates gctx (:entry %))) units)]
-                     (cond-> (rebuild-table-op opts
+                     (cond-> (rebuild-table-op pctx
                                (if fused (:name live-table) tname)
                                (or serves-pair (into #{} (map :path) entries))
                                live-table declared-table rename-map)
@@ -1389,10 +1391,10 @@
   "Plan the entries of one changed regular table under the resolved
   directive claims — see `plan-table-changes` for the selection rule
   and return shape."
-  [capabilities opts dctx tname entries]
-  (plan-table-changes capabilities opts dctx tname entries
-    (table-context (:live-snapshot opts) :live tname)
-    (table-context (:declared-snapshot opts) :declared tname)
+  [capabilities pctx dctx tname entries]
+  (plan-table-changes capabilities pctx dctx tname entries
+    (table-context (:live-snapshot pctx) :live tname)
+    (table-context (:declared-snapshot pctx) :declared tname)
     nil))
 
 ;; ---------------------------------------------------------------------------
@@ -1407,10 +1409,10 @@
   in place the name change is a :rename-table op ordered first, and a
   collapse rides one :rebuild-table whose copy maps the live name (and
   any renamed columns) to the declared ones."
-  [capabilities opts dctx removed added directive]
-  (let [live-table (table-context (:live-snapshot opts) :live (second (:path removed)))
-        declared-table (table-context (:declared-snapshot opts) :declared (second (:path added)))]
-    (plan-table-changes capabilities opts dctx (:name declared-table)
+  [capabilities pctx dctx removed added directive]
+  (let [live-table (table-context (:live-snapshot pctx) :live (second (:path removed)))
+        declared-table (table-context (:declared-snapshot pctx) :declared (second (:path added)))]
+    (plan-table-changes capabilities pctx dctx (:name declared-table)
       (d/fused-entries live-table declared-table)
       live-table declared-table
       {:directive directive :removed removed :added added})))
@@ -1441,7 +1443,7 @@
   else is a changed table planned fine-grained. `dctx` carries the
   resolved directive claims (ADR 0009): a whole-table removal plans as
   a phase-2 :drop-table op when a :drop-table directive authorizes it."
-  [capabilities opts dctx tname entries]
+  [capabilities pctx dctx tname entries]
   (let [whole (some #(when (= 2 (count (:path %))) %) entries)]
     (cond
       (and whole (= :added (:kind whole)))
@@ -1466,7 +1468,7 @@
                               " module-owned shadow tables — no general alter or"
                               " rebuild exists"))]}}
 
-      :else (plan-changed-table capabilities opts dctx tname entries))))
+      :else (plan-changed-table capabilities pctx dctx tname entries))))
 
 (defn- plan-view-group
   "Plan one view's whole-value entry (a view never carries fine-grained
@@ -1583,98 +1585,149 @@
                 :served served
                 :unhandled unhandled-paths})))))
 
+(defn- snapshot-shaped?
+  "True when `x` could be a Snapshot: a map of `:tables` and `:views`,
+  each keyed by object name (ADR 0001). Shape only — provenance rides
+  in metadata, and nothing here reads it."
+  [x]
+  (and (map? x) (map? (:tables x)) (map? (:views x))))
+
+(defn- check-context!
+  "ADR 0017's entry guard: planning reads whole table values out of the
+  two Snapshots the Diff was computed from, so both are required
+  arguments. One `:malformed-input` here, before any planning."
+  [live declared]
+  (doseq [[side snapshot] [[:live live] [:declared declared]]]
+    (when-not (snapshot-shaped? snapshot)
+      (u/malformed! (str "plan requires the " (name side) " Snapshot the Diff"
+                      " was computed from as its " (name side) " argument")
+        {:side side :argument snapshot}))))
+
+(defn- check-provenance!
+  "ADR 0017's provenance check — the pure-side sibling of `apply!`'s
+  fingerprint probe: the Snapshots handed to `plan` must be the ones
+  `diff` compared. Whole provenance on the live side; on the declared
+  side `:sqlite-version` alone, since a declared Snapshot's
+  `:schema-version` counts the statements a throwaway pristine database
+  happened to take and so differs with no semantic difference behind
+  it. Swapping the two arguments fails on the live side, unless both
+  sides carry byte-identical provenance."
+  [live declared diff]
+  (when (not= (meta live) (:live-metadata diff))
+    (u/malformed! "the live Snapshot is not the one this Diff was computed from"
+      {:side :live
+       :snapshot-provenance (meta live)
+       :diff-provenance (:live-metadata diff)}))
+  (when (not= (:sqlite-version (meta declared))
+          (:sqlite-version (:declared-metadata diff)))
+    (u/malformed! "the declared Snapshot is not the one this Diff was computed from"
+      {:side :declared
+       :snapshot-provenance (meta declared)
+       :diff-provenance (:declared-metadata diff)})))
+
 (defn plan
-  "Plan `diff` into an ordered, self-contained Plan value (ADR 0006):
-  `{:ops [...] :unhandled [...] :live-metadata ... :declared-metadata ...
+  "Plan `diff` — computed from Snapshots `live` and `declared` — into an
+  ordered, self-contained Plan value (ADR 0006): `{:ops [...]
+  :unhandled [...] :live-metadata ... :declared-metadata ...
   :capabilities ... :directives [...] :unused-directives [...]}` —
   plain EDN, list position is execution order, byte-identical for
   identical inputs (ADR 0010).
 
-  Opts: `:capabilities` (merged over the defaults — the live Snapshot's
-  SQLite version plus `:rebuild? true`), `:directives` (ADR 0009 — the
-  intent channel; structurally validated before planning, echoed
-  verbatim under `:directives`, the unmatched remainder reported in
-  input order under `:unused-directives`), and `:live-snapshot` /
-  `:declared-snapshot`, the two Snapshots the Diff was computed from —
-  required context whenever the Diff contains a changed table
-  (`:malformed-input` when missing there), unused otherwise.
+  Both Snapshots are required planning context, not options (ADR 0017):
+  the Diff carries only their provenance, while planning a changed
+  table — or a `:rename-table` directive fusing a removed/added pair —
+  reads whole table values. A missing or non-Snapshot argument, and a
+  Snapshot whose provenance is not the Diff's, each throw
+  `:malformed-input` before any planning.
+
+  Opts are exactly `:capabilities` (merged over the defaults — the live
+  Snapshot's SQLite version plus `:rebuild? true`) and `:directives`
+  (ADR 0009 — the intent channel; structurally validated before
+  planning, echoed verbatim under `:directives`, the unmatched
+  remainder reported in input order under `:unused-directives`).
 
   Every Diff entry is either served by ≥1 op or listed in `:unhandled`
   as `{:entry e :refusals [...]}` carrying every applicable Refusal
   (`{:class :code :explanation}`) — never throws for refusals."
-  [diff opts]
-  (let [capabilities (merge {:sqlite-version (get-in diff [:live-metadata :sqlite-version])
-                             :rebuild? true}
-                       (:capabilities opts))
-        directives (vec (:directives opts))
-        _ (validate-directives! directives)
-        entries (:entries diff)
-        dependents (surviving-dependents (:live-snapshot opts) entries)
-        opts (assoc opts
-               :surviving-dependents dependents
-               :surviving-sqls (surviving-referencer-sqls dependents))
-        groups (partition-by (fn [e] [(first (:path e)) (x/fold-name (second (:path e)))])
-                 entries)
-        group-key (fn [g] [(first (:path (first g))) (x/fold-name (second (:path (first g))))])
-        by-key (into {} (map (juxt group-key identity)) groups)
-        whole-entry (fn [k kind]
-                      (let [g (by-key k)
-                            e (first g)]
-                        (when (and (= 1 (count g)) (= 2 (count (:path e)))
-                                (= kind (:kind e)))
-                          e)))
-        fused (vec (for [dv directives
-                         :when (= :rename-table (:directive dv))
-                         :let [removed (whole-entry [:table (x/fold-name (:from dv))] :removed)
-                               added (whole-entry [:table (x/fold-name (:to dv))] :added)]
-                         :when (and removed added
-                                 ;; a virtual pair never fuses: no general
-                                 ;; alter or rebuild exists (ADR 0007)
-                                 (not (:virtual? (:live removed)))
-                                 (not (:virtual? (:declared added))))]
-                     {:directive dv :removed removed :added added}))
-        consumed (into #{} (mapcat (fn [{:keys [removed added]}]
-                                     [[:table (x/fold-name (second (:path removed)))]
-                                      [:table (x/fold-name (second (:path added)))]]))
-                   fused)
-        dctx {:drop-tables (into {} (comp (filter #(= :drop-table (:directive %)))
-                                      (map (fn [dv] [(x/fold-name (:table dv)) dv])))
-                             directives)
-              :column-renames (reduce (fn [m dv]
-                                        (if (= :rename-column (:directive dv))
-                                          (update m (x/fold-name (:table dv)) (fnil conj []) dv)
+  ([live declared diff] (plan live declared diff {}))
+  ([live declared diff opts]
+    (check-context! live declared)
+    (check-provenance! live declared diff)
+    (let [capabilities (merge {:sqlite-version (:sqlite-version (meta live))
+                               :rebuild? true}
+                         (:capabilities opts))
+          directives (vec (:directives opts))
+          _ (validate-directives! directives)
+          entries (:entries diff)
+          dependents (surviving-dependents live entries)
+          ;; the planning context every table planner threads: both
+          ;; Snapshots and what the phase-1 drops leave standing
+          pctx {:live-snapshot live
+                :declared-snapshot declared
+                :surviving-dependents dependents
+                :surviving-sqls (surviving-referencer-sqls dependents)}
+          groups (partition-by (fn [e] [(first (:path e)) (x/fold-name (second (:path e)))])
+                   entries)
+          group-key (fn [g] [(first (:path (first g))) (x/fold-name (second (:path (first g))))])
+          by-key (into {} (map (juxt group-key identity)) groups)
+          whole-entry (fn [k kind]
+                        (let [g (by-key k)
+                              e (first g)]
+                          (when (and (= 1 (count g)) (= 2 (count (:path e)))
+                                  (= kind (:kind e)))
+                            e)))
+          fused (vec (for [dv directives
+                           :when (= :rename-table (:directive dv))
+                           :let [removed (whole-entry [:table (x/fold-name (:from dv))] :removed)
+                                 added (whole-entry [:table (x/fold-name (:to dv))] :added)]
+                           :when (and removed added
+                                   ;; a virtual pair never fuses: no general
+                                   ;; alter or rebuild exists (ADR 0007)
+                                   (not (:virtual? (:live removed)))
+                                   (not (:virtual? (:declared added))))]
+                       {:directive dv :removed removed :added added}))
+          consumed (into #{} (mapcat (fn [{:keys [removed added]}]
+                                       [[:table (x/fold-name (second (:path removed)))]
+                                        [:table (x/fold-name (second (:path added)))]]))
+                     fused)
+          dctx {:drop-tables (into {} (comp (filter #(= :drop-table (:directive %)))
+                                        (map (fn [dv] [(x/fold-name (:table dv)) dv])))
+                               directives)
+                :column-renames (reduce (fn [m dv]
+                                          (if (= :rename-column (:directive dv))
+                                            (update m (x/fold-name (:table dv)) (fnil conj []) dv)
+                                            m))
+                                  {} directives)
+                :drop-columns (reduce (fn [m dv]
+                                        (if (= :drop-column (:directive dv))
+                                          (assoc-in m [(x/fold-name (:table dv))
+                                                       (x/fold-name (:column dv))]
+                                            dv)
                                           m))
-                                {} directives)
-              :drop-columns (reduce (fn [m dv]
-                                      (if (= :drop-column (:directive dv))
-                                        (assoc-in m [(x/fold-name (:table dv))
-                                                     (x/fold-name (:column dv))]
-                                          dv)
-                                        m))
-                              {} directives)}
-        results (-> (into [] (keep (fn [g]
-                                     (when-not (contains? consumed (group-key g))
-                                       (let [e (first g)
-                                             nm (second (:path e))]
-                                         (if (= :view (first (:path e)))
-                                           (plan-view-group capabilities nm g)
-                                           (plan-table-group capabilities opts dctx nm g))))))
-                      groups)
-                  (into (map (fn [{:keys [directive removed added]}]
-                               (plan-fused-table capabilities opts dctx removed added directive)))
-                    fused))
-        ops (mapv :op (sort-by :order (into [] (mapcat :ops) results)))
-        by-entry (apply merge {} (map :unhandled results))
-        unhandled (into [] (keep (fn [e]
-                                   (when-let [refusals (get by-entry e)]
-                                     {:entry e :refusals refusals})))
-                    entries)
-        used (into #{} (mapcat :used) results)]
-    (check-completeness! entries ops unhandled)
-    {:ops ops
-     :unhandled unhandled
-     :live-metadata (:live-metadata diff)
-     :declared-metadata (:declared-metadata diff)
-     :capabilities capabilities
-     :directives directives
-     :unused-directives (filterv (complement used) directives)}))
+                                {} directives)}
+          results (-> (into [] (keep (fn [g]
+                                       (when-not (contains? consumed (group-key g))
+                                         (let [e (first g)
+                                               nm (second (:path e))]
+                                           (if (= :view (first (:path e)))
+                                             (plan-view-group capabilities nm g)
+                                             (plan-table-group capabilities pctx dctx nm g))))))
+                        groups)
+                    (into (map (fn [{:keys [directive removed added]}]
+                                 (plan-fused-table capabilities pctx dctx removed added directive)))
+                      fused))
+          ops (mapv :op (sort-by :order (into [] (mapcat :ops) results)))
+          by-entry (apply merge {} (map :unhandled results))
+          unhandled (into [] (keep (fn [e]
+                                     (when-let [refusals (get by-entry e)]
+                                       {:entry e :refusals refusals})))
+                      entries)
+          used (into #{} (mapcat :used) results)]
+      (check-completeness! entries ops unhandled)
+      {:ops ops
+       :unhandled unhandled
+       :live-metadata (:live-metadata diff)
+       :declared-metadata (:declared-metadata diff)
+       :capabilities capabilities
+       :directives directives
+       :unused-directives (filterv (complement used) directives)})))

@@ -24,9 +24,8 @@
   (let [live (snap ["CREATE TABLE t (a INTEGER, b TEXT)"
                     "CREATE TABLE gone (x INTEGER)"])
         declared (snap ["CREATE TABLE t (a INTEGER, b BLOB NOT NULL)"])]
-    (m/plan (m/diff live declared)
-      {:live-snapshot live :declared-snapshot declared
-       :directives [{:directive :rename-table :from "nope" :to "nada"}]})))
+    (m/plan live declared (m/diff live declared)
+      {:directives [{:directive :rename-table :from "nope" :to "nada"}]})))
 
 (deftest plan-report-is-the-pre-apply-review-artifact
   (let [plan (review-plan)
@@ -70,8 +69,7 @@
        "INSERT INTO t (a, b) VALUES (1, 'x'), (2, NULL), (3, NULL)"])
     (let [live-snap (m/snapshot live)
           declared (snap ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
-          plan (m/plan (m/diff live-snap declared)
-                 {:live-snapshot live-snap :declared-snapshot declared})
+          plan (m/plan live-snap declared (m/diff live-snap declared))
           result (m/check live plan)
           report (m/check-report result)]
       (testing "the failing gate renders its code, path, explanation, count, and sample rows"
@@ -88,8 +86,7 @@
       (testing "a passing Check result renders a one-line all-clear, no gate blocks"
         (p/execute-batch! live ["UPDATE t SET b = 'filled' WHERE b IS NULL"])
         (let [live-snap (m/snapshot live)
-              plan (m/plan (m/diff live-snap declared)
-                     {:live-snapshot live-snap :declared-snapshot declared})
+              plan (m/plan live-snap declared (m/diff live-snap declared))
               passing (m/check live plan)
               pass-report (m/check-report passing)]
           (is (true? (:pass? passing)))
@@ -103,8 +100,7 @@
         (map #(str "INSERT INTO t (a, b) VALUES (" % ", NULL)") (range 12))))
     (let [live-snap (m/snapshot live)
           declared (snap ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
-          plan (m/plan (m/diff live-snap declared)
-                 {:live-snapshot live-snap :declared-snapshot declared})
+          plan (m/plan live-snap declared (m/diff live-snap declared))
           report (m/check-report (m/check live plan))]
       (is (str/includes? report "10 or more")
         "a count at the Gate's baked limit reads as \"limit or more\""))))

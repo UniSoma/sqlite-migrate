@@ -73,7 +73,7 @@
       "")))
 
 (defn- identity-line
-  "One side's identity for a report header: its Snapshot-metadata block
+  "One side's identity for a report header: its Snapshot-provenance block
   rendered field by field."
   [label {:keys [sqlite-version schema-version]}]
   (str label "  sqlite " sqlite-version "  schema_version " schema-version))

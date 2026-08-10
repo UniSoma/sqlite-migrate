@@ -24,8 +24,7 @@
   ([live-decl declared-decl opts]
     (let [live (snap live-decl)
           declared (snap declared-decl)]
-      (m/plan (m/diff live declared)
-        (merge {:live-snapshot live :declared-snapshot declared} opts)))))
+      (m/plan live declared (m/diff live declared) opts))))
 
 (defn- refusal-codes
   "The `[class code]` pairs of every Refusal on every unhandled entry,
@@ -48,8 +47,7 @@
         (p/execute-batch! live (vec live-decl)))
       (let [live-snap (m/snapshot live)
             declared (m/declared-snapshot pristine declared-decl)
-            pl (m/plan (m/diff live-snap declared)
-                 {:live-snapshot live-snap :declared-snapshot declared})]
+            pl (m/plan live-snap declared (m/diff live-snap declared))]
         (m/apply! live pl apply-opts)
         (not (m/drift? (m/diff (m/snapshot live) declared)))))))
 
@@ -173,8 +171,7 @@
   (with-open [pristine (sql-jdbc/in-memory)]
     (let [live-snap (m/snapshot live)
           declared (m/declared-snapshot pristine declared-decl)
-          pl (m/plan (m/diff live-snap declared)
-               {:live-snapshot live-snap :declared-snapshot declared})]
+          pl (m/plan live-snap declared (m/diff live-snap declared))]
       (is (= [:rebuild-table] (mapv :kind (:ops pl)))
         "the scenario must plan as exactly one rebuild")
       (m/apply! live pl)
@@ -249,8 +246,7 @@
     (let [declared-decl ["CREATE TABLE t (a INTEGER, x INT, b TEXT)"]
           live-snap (m/snapshot live)
           declared (m/declared-snapshot pristine declared-decl)
-          pl (m/plan (m/diff live-snap declared)
-               {:live-snapshot live-snap :declared-snapshot declared})]
+          pl (m/plan live-snap declared (m/diff live-snap declared))]
       (is (= [:rebuild-table] (mapv :kind (:ops pl))))
       (is (= [[:table "gone"]] (mapv (comp :path :entry) (:unhandled pl))))
       (m/apply! live pl {:allow-unhandled? true})
@@ -259,8 +255,7 @@
               (:entries (m/diff (m/snapshot live) declared)))))
       (testing "fixpoint corollary: re-planning yields zero ops and the same unhandled entries"
         (let [live-snap2 (m/snapshot live)
-              pl2 (m/plan (m/diff live-snap2 declared)
-                    {:live-snapshot live-snap2 :declared-snapshot declared})]
+              pl2 (m/plan live-snap2 declared (m/diff live-snap2 declared))]
           (is (empty? (:ops pl2)))
           (is (= (mapv :entry (:unhandled pl)) (mapv :entry (:unhandled pl2))))))
       (testing "and the rebuilt table's rows survived alongside"

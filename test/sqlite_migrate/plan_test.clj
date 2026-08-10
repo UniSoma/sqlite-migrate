@@ -24,8 +24,7 @@
   ([live-decl declared-decl opts]
     (let [live (snap live-decl)
           declared (snap declared-decl)]
-      (m/plan (m/diff live declared)
-        (merge {:live-snapshot live :declared-snapshot declared} opts)))))
+      (m/plan live declared (m/diff live declared) opts))))
 
 (defn- kinds+sql [pl]
   (mapv (juxt :kind :sql) (:ops pl)))
@@ -51,8 +50,7 @@
         (p/execute-batch! live (vec live-decl)))
       (let [live-snap (m/snapshot live)
             declared (m/declared-snapshot pristine declared-decl)
-            pl (m/plan (m/diff live-snap declared)
-                 {:live-snapshot live-snap :declared-snapshot declared})]
+            pl (m/plan live-snap declared (m/diff live-snap declared))]
         (m/apply! live pl apply-opts)
         (not (m/drift? (m/diff (m/snapshot live) declared)))))))
 
@@ -61,7 +59,8 @@
 
 (deftest capabilities-default-to-live-version-with-rebuild-allowed
   (let [live (snap ["CREATE TABLE t (a INTEGER)"])
-        pl (m/plan (m/diff live (snap ["CREATE TABLE t (a INTEGER)"])))]
+        declared (snap ["CREATE TABLE t (a INTEGER)"])
+        pl (m/plan live declared (m/diff live declared))]
     (testing "the Capabilities are a flat map: the live Snapshot's SQLite version plus :rebuild? true"
       (is (= {:sqlite-version (:sqlite-version (meta live)) :rebuild? true}
             (:capabilities pl)))))
@@ -402,18 +401,57 @@
     (let [l (snap live)
           d (snap declared)
           diff (m/diff l d)]
-      (is (complete? diff (m/plan diff {:live-snapshot l :declared-snapshot d}))
+      (is (complete? diff (m/plan l d diff))
         (str "completeness must hold for " (pr-str [live declared]))))))
 
-(deftest plan-throws-malformed-input-without-snapshot-context
-  (testing "planning a changed table without the Snapshots in opts is malformed input"
-    (let [live (snap ["CREATE TABLE t (a INTEGER)"])
-          declared (snap ["CREATE TABLE t (a INTEGER, b TEXT)"])
-          ex (thrown-info (m/plan (m/diff live declared) {}))]
-      (is (some? ex) "plan must throw when a changed table has no Snapshot context")
-      (is (= :malformed-input (:sqlite-migrate/error (ex-data ex))))
-      (is (= :live-snapshot (:missing (ex-data ex))))
-      (is (= "t" (:table (ex-data ex)))))))
+(deftest plan-guards-its-snapshot-context-at-the-entry
+  (let [live (snap ["CREATE TABLE t (a INTEGER)"])
+        declared (snap ["CREATE TABLE t (a INTEGER, b TEXT)"])
+        diff (m/diff live declared)
+        error-of (fn [ex] (select-keys (ex-data ex) [:sqlite-migrate/error :side]))]
+    (testing "a missing Snapshot is malformed input, named by side"
+      (is (= {:sqlite-migrate/error :malformed-input :side :live}
+            (error-of (thrown-info (m/plan nil declared diff)))))
+      (is (= {:sqlite-migrate/error :malformed-input :side :declared}
+            (error-of (thrown-info (m/plan live nil diff))))))
+    (testing "a value that is not Snapshot-shaped is malformed input too"
+      (is (= {:sqlite-migrate/error :malformed-input :side :live}
+            (error-of (thrown-info (m/plan {:tables {}} declared diff))))))
+    (testing "the guard is at the entry: an empty Diff throws just the same"
+      (is (= {:sqlite-migrate/error :malformed-input :side :live}
+            (error-of (thrown-info (m/plan nil live (m/diff live live)))))))))
+
+(deftest plan-refuses-snapshots-the-diff-was-not-computed-from
+  (let [live (snap ["CREATE TABLE t (a INTEGER)"])
+        declared (snap ["CREATE TABLE t (a INTEGER, b TEXT)"])
+        diff (m/diff live declared)
+        error-of (fn [ex] (select-keys (ex-data ex) [:sqlite-migrate/error :side]))]
+    (testing "the whole live provenance must match the Diff's"
+      (is (= {:sqlite-migrate/error :malformed-input :side :live}
+            (error-of (thrown-info
+                        (m/plan (vary-meta live assoc :schema-version 999) declared diff)))))
+      (is (= {:sqlite-migrate/error :malformed-input :side :live}
+            (error-of (thrown-info
+                        (m/plan (vary-meta live assoc :sqlite-version "3.0.0") declared diff))))))
+    (testing "on the declared side only the SQLite version is compared"
+      (is (= {:sqlite-migrate/error :malformed-input :side :declared}
+            (error-of (thrown-info
+                        (m/plan live (vary-meta declared assoc :sqlite-version "3.0.0") diff)))))
+      (is (some? (m/plan live (vary-meta declared assoc :schema-version 999) diff))
+        (str "a declared schema_version is a pristine database's mutation counter,"
+          " not identity (ADR 0017)")))))
+
+(deftest rename-table-directive-plans-without-a-changed-entry
+  (testing "a fused rename reads whole table values though no entry is :changed (ADR 0017)"
+    (let [live (snap ["CREATE TABLE users (id INTEGER PRIMARY KEY)"])
+          declared (snap ["CREATE TABLE people (id INTEGER PRIMARY KEY)"])
+          diff (m/diff live declared)
+          pl (m/plan live declared diff
+               {:directives [{:directive :rename-table :from "users" :to "people"}]})]
+      (is (= #{:added :removed} (into #{} (map :kind) (:entries diff)))
+        "the Diff has no :changed entry, so the retired opts trigger would have missed it")
+      (is (= [:rename-table] (mapv :kind (:ops pl))))
+      (is (empty? (:unhandled pl))))))
 
 (deftest completeness-violation-throws-internal
   (testing "an entry neither served nor unhandled is a planner bug — :internal"
@@ -432,8 +470,7 @@
                             "CREATE TABLE gone (z INTEGER)"])
     (let [live-snap (m/snapshot live)
           declared (m/declared-snapshot pristine ["CREATE TABLE t (a INTEGER, c INT)"])
-          pl (m/plan (m/diff live-snap declared)
-               {:live-snapshot live-snap :declared-snapshot declared})]
+          pl (m/plan live-snap declared (m/diff live-snap declared))]
       (is (= [:add-column] (mapv :kind (:ops pl))))
       (is (= 1 (count (:unhandled pl))))
       (testing "by default apply! refuses the whole Plan, executing nothing"
@@ -473,9 +510,8 @@
   (testing "planning the same Diff twice is pr-str-identical"
     (let [l (snap determinism-live)
           d (snap determinism-declared)
-          diff (m/diff l d)
-          opts {:live-snapshot l :declared-snapshot d}]
-      (is (= (pr-str (m/plan diff opts)) (pr-str (m/plan diff opts))))))
+          diff (m/diff l d)]
+      (is (= (pr-str (m/plan l d diff)) (pr-str (m/plan l d diff))))))
   (testing "independently rebuilt inputs yield byte-identical Plans (metadata aside)"
     (let [plan-once (fn []
                       (dissoc (plan-of determinism-live determinism-declared

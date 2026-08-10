@@ -27,9 +27,8 @@
   ([live-decl declared-decl directives opts]
     (let [live (snap live-decl)
           declared (snap declared-decl)]
-      (m/plan (m/diff live declared)
-        (merge {:live-snapshot live :declared-snapshot declared
-                :directives directives}
+      (m/plan live declared (m/diff live declared)
+        (merge {:directives directives}
           opts)))))
 
 (defn- refusal-codes
@@ -308,9 +307,8 @@
   [live declared-decl directives]
   (let [live-snap (m/snapshot live)
         declared (snap declared-decl)]
-    (m/plan (m/diff live-snap declared)
-      {:live-snapshot live-snap :declared-snapshot declared
-       :directives directives})))
+    (m/plan live-snap declared (m/diff live-snap declared)
+      {:directives directives})))
 
 (defn- converged?
   "True when the live database no longer drifts from `declared-decl`."

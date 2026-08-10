@@ -55,9 +55,8 @@ Directives are conditional, and unmatched ones are inert.
           declared-snap (m/declared-snapshot pristine declaration)
           diff (m/diff live-snap declared-snap)]
       (when (m/drift? diff)
-        (let [plan (m/plan diff {:live-snapshot live-snap
-                                 :declared-snapshot declared-snap
-                                 :directives directives})]
+        (let [plan (m/plan live-snap declared-snap diff
+                     {:directives directives})]
           (m/apply! live plan))))))
 ```
 
@@ -101,10 +100,9 @@ maintenance window where nothing else has the database open.
                 pristine (jdbc/in-memory)]
       (let [live-snap (m/snapshot conn)
             declared-snap (m/declared-snapshot pristine declaration)
-            plan (m/plan (m/diff live-snap declared-snap)
-                   {:live-snapshot live-snap
-                    :declared-snapshot declared-snap
-                    :directives directives})]
+            plan (m/plan live-snap declared-snap
+                   (m/diff live-snap declared-snap)
+                   {:directives directives})]
         (println (m/plan-report plan))   ; the pre-apply review artifact
         (m/apply! conn plan)))           ; rehearsed on the copy
     staged))

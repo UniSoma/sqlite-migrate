@@ -24,8 +24,7 @@ io.github.unisoma/sqlite-migrate {:mvn/version "0.1.0-SNAPSHOT"}
         declared-snap (m/declared-snapshot pristine declaration) ; realize the Declaration
         diff (m/diff live-snap declared-snap)]                   ; the first-class Diff
     (when (m/drift? diff)
-      (let [plan (m/plan diff {:live-snapshot live-snap
-                               :declared-snapshot declared-snap})]
+      (let [plan (m/plan live-snap declared-snap diff)]
         (println (m/plan-report plan)) ; review: exactly these statements will run
         (m/apply! live plan)))))       ; one transaction, all-or-nothing
 ```

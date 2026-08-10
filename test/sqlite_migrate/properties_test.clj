@@ -63,9 +63,8 @@
       (p/execute-batch! conn (vec inserts)))
     (let [declared (snap-of (:target scenario))
           live-snap (m/snapshot conn)
-          plan (m/plan (m/diff live-snap declared)
-                 {:live-snapshot live-snap :declared-snapshot declared
-                  :directives (:directives scenario)})
+          plan (m/plan live-snap declared (m/diff live-snap declared)
+                 {:directives (:directives scenario)})
           check (m/check conn plan)]
       (f {:conn conn :plan plan :check check :declared declared}))))
 
@@ -142,7 +141,7 @@
     (let [a (snap-of s)
           b (snap-of s)
           d (m/diff a b)
-          plan (m/plan d {:live-snapshot a :declared-snapshot b})]
+          plan (m/plan a b d)]
       (and (not (m/drift? d))
         (empty? (:ops plan))
         (empty? (:unhandled plan))))))
@@ -215,9 +214,8 @@
   [scenario]
   (let [live (snap-of (:live scenario))
         declared (snap-of (:target scenario))]
-    (m/plan (m/diff live declared)
-      {:live-snapshot live :declared-snapshot declared
-       :directives (:directives scenario)})))
+    (m/plan live declared (m/diff live declared)
+      {:directives (:directives scenario)})))
 
 (defspec plan-determinism-property trials
   (prop/for-all [scenario g/gen-scenario]
@@ -243,7 +241,7 @@
         b (snap-of corpus/nasty-declaration)
         d (m/diff a b)]
     (is (not (m/drift? d)) "the nasty corpus must not drift from itself")
-    (let [plan (m/plan d {:live-snapshot a :declared-snapshot b})]
+    (let [plan (m/plan a b d)]
       (is (empty? (:ops plan)))
       (is (empty? (:unhandled plan))))))
 
@@ -257,16 +255,14 @@
   (let [plan-once (fn []
                     (let [live (snap-of corpus/nasty-declaration)
                           declared (snap-of corpus/nasty-target-declaration)]
-                      (m/plan (m/diff live declared)
-                        {:live-snapshot live :declared-snapshot declared})))]
+                      (m/plan live declared (m/diff live declared))))]
     (is (= (pr-str (plan-once)) (pr-str (plan-once)))
       "independently recomputed Plans must be byte-identical")
     (with-open [conn (sql-jdbc/in-memory)]
       (p/execute-batch! conn corpus/nasty-declaration)
       (let [declared (snap-of corpus/nasty-target-declaration)
             live (m/snapshot conn)
-            plan (m/plan (m/diff live declared)
-                   {:live-snapshot live :declared-snapshot declared})]
+            plan (m/plan live declared (m/diff live declared))]
         (is (:pass? (m/check conn plan)) "no rows, so every Gate passes")
         (m/apply! conn plan {:allow-unhandled? true})
         (is (= (mapv :entry (:unhandled plan))
@@ -283,8 +279,7 @@
                               (str/replace text "'" "''") "')")])
     (let [declared (snap-of (:target corpus/strict-conversion-seed))
           live (m/snapshot conn)
-          plan (m/plan (m/diff live declared)
-                 {:live-snapshot live :declared-snapshot declared})]
+          plan (m/plan live declared (m/diff live declared))]
       (f conn plan (m/check conn plan)))))
 
 (deftest corpus-strict-conversion-gate-matches-sqlite-in-both-directions
@@ -318,8 +313,7 @@
                   (p/execute-batch! conn [(str "INSERT INTO t (a) VALUES (" i ")")]))
                 (let [declared (snap-of target)
                       live-snap (m/snapshot conn)
-                      plan (m/plan (m/diff live-snap declared)
-                             {:live-snapshot live-snap :declared-snapshot declared})]
+                      plan (m/plan live-snap declared (m/diff live-snap declared))]
                   (f conn plan (m/check conn plan)))))]
     (testing "two rows share the constant default, so the key must gate"
       (run constant-default-target 2
@@ -350,8 +344,7 @@
                 (p/execute-batch! conn rows)
                 (let [declared (snap-of target)
                       live-snap (m/snapshot conn)
-                      plan (m/plan (m/diff live-snap declared)
-                             {:live-snapshot live-snap :declared-snapshot declared})]
+                      plan (m/plan live-snap declared (m/diff live-snap declared))]
                   (f conn plan (m/check conn plan)))))]
     (testing "an orphan child row fails the :foreign-key Gate; forcing Apply aborts"
       (run ["INSERT INTO p (id) VALUES (1)"

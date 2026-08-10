@@ -58,8 +58,10 @@ ADR 0016 gave `apply!`: the supplied Snapshots are compared against the Diff's
 `:live-metadata`/`:declared-metadata`, `:malformed-input` on mismatch. Full-map
 `=` on the live side; **`:sqlite-version` only on the declared side**, because a
 declared Snapshot's `schema_version` is the mutation counter of a throwaway
-pristine database — a false-positive surface carrying no information. A
-live/declared mixup still fails, via the live-side comparison.
+pristine database — a false-positive surface carrying no information. Swapping
+the two arguments fails on the live-side comparison whenever the two sides'
+provenance differs at all, which is the ordinary case: a live file's counter and
+a freshly realized pristine database's rarely coincide.
 
 `schema_version` is a mutation counter, not a content hash: unequal proves
 staleness, equal does not prove identity. Every check built on it — here and in

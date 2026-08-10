@@ -25,8 +25,7 @@
   (with-open [pristine (sql-jdbc/in-memory)]
     (let [live-snap (m/snapshot live)
           declared (m/declared-snapshot pristine declared-decl)]
-      (m/plan (m/diff live-snap declared)
-        {:live-snapshot live-snap :declared-snapshot declared}))))
+      (m/plan live-snap declared (m/diff live-snap declared)))))
 
 (defn- dispatch
   "The one consumer-side dispatch ADR 0012 promises: the class keyword
@@ -51,12 +50,12 @@
   (testing ":malformed-input carries the offending input under a descriptive key"
     (let [live (snap ["CREATE TABLE t (a INTEGER)"])
           bad {:directive :rename-table :from "x"}
-          ex (thrown-info (m/plan (m/diff live live) {:directives [bad]}))]
+          ex (thrown-info (m/plan live live (m/diff live live) {:directives [bad]}))]
       (is (some? ex) "a directive missing its required keys must throw")
       (is (= :handled/malformed-input (dispatch ex)))
       (is (one-line? ex))
       (is (= bad (:directive (ex-data ex))) "the offending directive rides verbatim")))
-  (testing ":drift-refused carries both fingerprints and both Snapshot-metadata blocks"
+  (testing ":drift-refused carries both fingerprints and both Snapshot-provenance blocks"
     (with-open [live (sql-jdbc/in-memory)]
       (p/execute-batch! live ["CREATE TABLE t (a INTEGER)"])
       (let [plan (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT)"])]
@@ -71,9 +70,9 @@
           (is (integer? (:live-fingerprint data)))
           (is (not= (:plan-fingerprint data) (:live-fingerprint data)))
           (is (= (:live-metadata plan) (:live-metadata data))
-            "the Plan's live Snapshot metadata rides verbatim")
+            "the Plan's live Snapshot provenance rides verbatim")
           (is (= (:declared-metadata plan) (:declared-metadata data))
-            "the Plan's declared Snapshot metadata rides verbatim")))))
+            "the Plan's declared Snapshot provenance rides verbatim")))))
   (testing ":unhandled-refused carries the unhandled entries verbatim with their refusal vectors"
     (with-open [live (sql-jdbc/in-memory)]
       (p/execute-batch! live ["CREATE TABLE gone (x INTEGER)"])
