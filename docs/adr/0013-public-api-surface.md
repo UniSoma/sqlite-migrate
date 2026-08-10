@@ -1,5 +1,7 @@
 # Public API surface: four namespaces, a two-op executor protocol, conn-symmetric edges
 
+> Amended by ADR 0016: `execute-batch!` gains a `gate-sqls` arity and the Frame a gate step.
+
 The public surface is **four namespaces** (concrete names deferred to
 packaging): a **core** namespace holding the entire pipeline, a **protocol**
 namespace holding the effectful-edge contract, a **JDBC adapter** namespace,

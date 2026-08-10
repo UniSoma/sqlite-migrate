@@ -204,9 +204,10 @@ _Avoid_: driver, provider
 
 **Frame**:
 The executor-owned atomic envelope around a Plan's statements: foreign-key
-enforcement off, one transaction, statements in order, a foreign-key check
-before commit, all-or-nothing, enforcement always restored. Always the same
-shape — never conditional on the Plan's contents.
+enforcement off, one transaction, the plan-compiled gate SELECTs first (any
+violating row ⇒ rollback), statements in order, a foreign-key check before
+commit, all-or-nothing, enforcement always restored. Always the same shape —
+the gate list may be empty, but the step always exists.
 _Avoid_: transaction wrapper, harness
 
 **Non-success class**:
