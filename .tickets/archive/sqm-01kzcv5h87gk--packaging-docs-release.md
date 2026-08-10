@@ -6,7 +6,7 @@ type: task
 priority: 2
 mode: afk
 created: '2026-08-07T00:49:59.554568924Z'
-updated: '2026-08-09T22:50:19.896997770Z'
+updated: '2026-08-10T23:44:40.010407739Z'
 closed: '2026-08-09T22:50:19.896997770Z'
 parent: sqm-01kzctnhwmjm
 acceptance:
@@ -22,6 +22,8 @@ deps:
 - sqm-01kzcv5gf22s
 tags:
 - phase-5
+links:
+- sqm-01kzq10sjede
 ---
 
 ## Description
