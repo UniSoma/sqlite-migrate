@@ -64,7 +64,10 @@ Then the network steps, in this order:
 10. `git push origin vX.Y.Z`.
 11. `bb deploy`. Needs `CLOJARS_USERNAME` / `CLOJARS_PASSWORD` set to a Clojars
     deploy token. Clojars fixed releases are immutable: this is the point of no
-    return.
+    return. The task prints the coordinate it is about to publish and where it
+    was built from, then makes you type the version back before it proceeds —
+    read it, and abort if it is not the version you tagged. `SQM_DEPLOY_YES=1`
+    skips the prompt for scripted use.
 12. `bb cljdoc` to trigger the doc build, then confirm the article tree and the
     `sqlite-migrate.protocols` docstrings render at
     <https://cljdoc.org/d/io.github.unisoma/sqlite-migrate>.

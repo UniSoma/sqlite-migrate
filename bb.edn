@@ -10,10 +10,30 @@
    :task (shell "clojure" "-T:build" "install")}
 
   deploy
-  {:doc "Build and deploy to Clojars (clojure -T:build deploy). Needs CLOJARS_USERNAME/CLOJARS_PASSWORD."
-   :task (do (doseq [v ["CLOJARS_USERNAME" "CLOJARS_PASSWORD"]]
-               (when (empty? (System/getenv v))
-                 (throw (ex-info (str "deploy: " v " is not set — export a Clojars deploy token first") {}))))
+  {:doc "Build and deploy to Clojars (clojure -T:build deploy). Needs CLOJARS_USERNAME/CLOJARS_PASSWORD. Confirms the coordinate first; SQM_DEPLOY_YES=1 skips the prompt."
+   :requires ([babashka.process :as p]
+              [clojure.string :as str])
+   :task (let [version (str/trim (:out (p/sh ["clojure" "-T:build" "print-version"])))
+               built-from (str/trim (:out (p/sh ["git" "describe" "--tags" "--always" "--dirty"])))]
+           (doseq [v ["CLOJARS_USERNAME" "CLOJARS_PASSWORD"]]
+             (when (empty? (System/getenv v))
+               (throw (ex-info (str "deploy: " v " is not set — export a Clojars deploy token first") {}))))
+           ;; The version comes from the working tree's build.clj, never from a
+           ;; tag. Deploying one commit past a release publishes the next
+           ;; -SNAPSHOT instead of the tagged version — the failure that cut
+           ;; 0.1.0 twice. A human reads the coordinate before it is written.
+           (println (str "deploy: io.github.unisoma/sqlite-migrate " version
+                      " -> Clojars, built from " built-from))
+           (when-not (str/ends-with? version "-SNAPSHOT")
+             (println "deploy: fixed release — the Clojars coordinate is immutable."))
+           (if (= "1" (System/getenv "SQM_DEPLOY_YES"))
+             (println "deploy: SQM_DEPLOY_YES=1, skipping confirmation.")
+             (do (print (str "deploy: type " version " to continue: "))
+               (flush)
+               (let [typed (str/trim (or (read-line) ""))]
+                 (when-not (= typed version)
+                   (throw (ex-info (str "deploy: aborted — got " (pr-str typed)
+                                     ", expected " (pr-str version)) {}))))))
            (shell "clojure" "-T:build" "deploy"))}
 
   cljdoc
