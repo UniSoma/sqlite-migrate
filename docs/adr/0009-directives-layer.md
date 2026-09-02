@@ -1,5 +1,10 @@
 # Directives are conditional per-object intent consumed by the planner
 
+> Amended by ADR 0020: a Directive set may *derive* explicit per-object drop
+> Directives from a Diff. This is compatible with the no-bulk-approval rule
+> below — the planner still receives one reviewable Directive per object and
+> never a wildcard; only the typing is saved.
+
 A **Directive** is the intent channel: the datum by which an author supplies
 what a pure state diff cannot infer. Directives are a **planner input** —
 `plan` takes the Diff, the Capabilities, and a seq of directives — and the

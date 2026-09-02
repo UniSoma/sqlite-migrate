@@ -5,6 +5,8 @@
 > Amended by ADR 0017: `plan` takes both Snapshots positionally, ahead of the Diff.
 >
 > Amended by ADR 0018: the inventory table's Returns column lists success values only; every effectful fn throws on non-success.
+>
+> Amended by ADR 0020: a fifth public namespace, `sqlite-migrate.directives`, holds the Directive set builder; the core inventory is unchanged.
 
 The public surface is **four namespaces** (concrete names deferred to
 packaging): a **core** namespace holding the entire pipeline, a **protocol**

@@ -184,6 +184,15 @@ terms; unmatched directives are inert and reported in the Plan as unused. Lifts
 or renamed.
 _Avoid_: hint, annotation, migration option, override
 
+**Directive set**:
+The Directives being assembled against one Diff before planning: a value binding
+that Diff to an ordered collection of Directives, grown step by step. Literal steps
+append the Directives they are given verbatim; derived steps read the Diff and emit
+one explicit per-object Directive for each candidate not already claimed earlier in
+the set. Steps are order-sensitive — a drop derived before a rename is a conflict,
+not a subtraction. Its output is plain Directives; the planner never sees the set.
+_Avoid_: builder, context, ctx, directive pipeline, bulk directive
+
 **Claim**:
 A Directive resolved against the live side it names. The planner indexes the supplied
 Directives by folded live table name — table drops, column renames, column drops — and
