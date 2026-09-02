@@ -77,7 +77,7 @@ live file ───────────────────────�
 
 ## Public surface
 
-Four namespaces (ADR 0013/0014); everything else lives under
+Five namespaces (ADR 0013/0014/0020); everything else lives under
 `sqlite-migrate.impl.*` and is not part of the public surface.
 
 | Role | Namespace |
@@ -86,6 +86,7 @@ Four namespaces (ADR 0013/0014); everything else lives under
 | executor protocol | `sqlite-migrate.protocols` |
 | JDBC adapter | `sqlite-migrate.jdbc` |
 | EDN schema sugar | `sqlite-migrate.schema` |
+| Directive set builder | `sqlite-migrate.directives` |
 
 Adapter authors implement the two-op `SQLiteExecutor` protocol in
 `sqlite-migrate.protocols`: `execute-query [conn sql params]` and

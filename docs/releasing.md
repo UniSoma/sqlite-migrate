@@ -12,8 +12,9 @@ mutable test channel on Clojars; fixed releases are immutable, are tagged
 
 A change belongs in `CHANGELOG.md` if either is true:
 
-- It is observable through the four public namespaces of ADR 0013 —
-  `sqlite-migrate.core`, `.protocols`, `.jdbc`, `.schema` — including new
+- It is observable through the five public namespaces of ADR 0013 and 0020 —
+  `sqlite-migrate.core`, `.protocols`, `.jdbc`, `.schema`, `.directives` —
+  including new
   members of the add-only open sets (error classes, refusal codes, gates,
   directive kinds).
 - It changes the statements `plan` emits for an input that already planned

@@ -1,19 +1,20 @@
 ---
 id: sqm-01m1hyze535s
 title: Add the Directive set builder namespace (sqlite-migrate.directives)
-status: open
+status: closed
 type: feature
 priority: 2
 mode: afk
 created: '2026-09-02T21:04:09.891807075Z'
-updated: '2026-09-02T21:14:54.474051268Z'
+updated: '2026-09-02T21:23:01.927284285Z'
+closed: '2026-09-02T21:23:01.927284285Z'
 acceptance:
 - title: bb test passes; clj-kondo --lint src test ci is clean
-  done: false
+  done: true
 - title: The ADR 0020 example thread runs verbatim at the REPL against a fixture and its Plan has no unhandled entries
-  done: false
+  done: true
 - title: README, CHANGELOG, and ci/smoke/smoke.clj cover the new namespace
-  done: false
+  done: true
 ---
 
 ## Description
@@ -49,3 +50,9 @@ Not in scope: the planner (untouched), singular rename fns, validation of litera
 Docs to update in the same change: README section next to the directives section showing the `->` thread above; CHANGELOG entry under the current -SNAPSHOT per docs/releasing.md; `ci/smoke/smoke.clj` exercises the new namespace once (it is public API, so the native-image job must load it); ADR 0013's inventory is already amended.
 
 Tests (shape per docs/agents/clojure-style.md): example tests for each fn on a small live/declared pair; a rename-then-drop thread where the renamed table is excluded and the rest dropped; the reverse order producing a set the planner rejects with `:malformed-input`; a half-matched rename still suppressing the drop, with the Plan showing it unused and the entry unhandled; the select-list case-fold (`"Users"` selecting `users`); a property: for any generated Diff, `(plan live declared diff {:directives (-> (against diff) drop-tables drop-columns build)})` has no `:needs-intent` refusal of code `:destructive-drop` left in `:unhandled`.
+
+## Notes
+
+**2026-09-02T21:23:01.927284285Z**
+
+Shipped sqlite-migrate.directives (against, rename-tables, rename-columns, drop-tables, drop-columns, build) in commit 1538c69 with example tests, the ordering and half-match cases, and a property that derived drops lift every :destructive-drop refusal. README, CHANGELOG, design and releasing docs, and the smoke program cover the namespace. bb test: 166 tests green; clj-kondo clean; the ADR 0020 thread ran verbatim at the REPL with no unhandled entries.

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sqlite-migrate.directives`, a fifth public namespace holding the Directive
+  set: `against` binds a Diff, `rename-tables` and `rename-columns` append
+  literal rename Directives, `drop-tables` and `drop-columns` derive one
+  explicit `:drop-table` / `:drop-column` Directive per removed object not
+  claimed by an earlier rename, and `build` returns the vector `plan` takes
+  under `:directives`. The planner is unchanged: it still receives only
+  per-object Directives and no wildcard.
+
 ## [0.1.0] - 2026-08-10
 
 First fixed release. The earlier `0.1.0-SNAPSHOT` coordinate was a mutable

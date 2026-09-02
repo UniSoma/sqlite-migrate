@@ -30,7 +30,8 @@ io.github.unisoma/sqlite-migrate {:mvn/version "0.1.0"}
 ```
 
 `plan` refuses renames and destructive drops until you pass explicit
-`:directives`; data preconditions (a new NOT NULL over existing
+`:directives` — `sqlite-migrate.directives` assembles them against the
+Diff (see [Directive sets](#directive-sets)); data preconditions (a new NOT NULL over existing
 rows) surface as Gates you probe read-only with `m/check`. To build
 schemas as data, `sqlite-migrate.schema/->sql` compiles an EDN Schema
 value into the same Declaration statement vector.
@@ -122,6 +123,43 @@ A Gate examines the rows of the live table before a change that adds a constrain
 or makes a constraint more strict. A Gate can do this for these constraints:
 `NOT NULL`, CHECK, UNIQUE, the primary key, a foreign key, `STRICT`, and
 `WITHOUT ROWID`.
+
+## Directive sets
+
+Each drop needs its own Directive, and a Diff can imply many. Rather than
+planning once and copying every `:destructive-drop` refusal out of
+`:unhandled` by hand, assemble the Directives against the Diff with
+`sqlite-migrate.directives`. The thread opens with `against` and closes with
+`build`, and `build` returns exactly what `plan` takes under `:directives`:
+
+```clojure
+(require '[sqlite-migrate.directives :as d])
+
+(def directives
+  (-> (d/against diff)
+      (d/rename-tables  {"users" "people"})               ; live name → declared name
+      (d/rename-columns {"users" {"name" "full_name"}})   ; live table → live col → declared col
+      (d/drop-tables)                                     ; every removed table not renamed above
+      (d/drop-columns ["orders"])                         ; removed columns of the listed tables
+      (d/build)))                                         ; → vector of Directives
+
+(m/plan live-snap declared-snap diff {:directives directives})
+```
+
+`rename-tables` and `rename-columns` append the Directives you give them,
+verbatim. `drop-tables` and `drop-columns` read the Diff and emit one
+`:drop-table` or `:drop-column` Directive per removed object, skipping any
+object a rename earlier in the thread claims. An optional list of live names
+narrows a derived step to those objects; names fold the way Directive
+identifiers do, so `"Users"` selects `users`.
+
+The steps are eager, so order matters: a rename must come before the drops it
+should exclude. A drop derived first and a rename added after is the
+rename-and-drop conflict `plan` rejects as `:malformed-input`. A rename whose
+`:from` names a removed object still suppresses that drop even when its `:to`
+matches nothing, and the Plan then reports the rename under
+`:unused-directives` with the entry unhandled. The set never checks a rename
+against the Diff; the Plan does, and it never sees the set — only the vector.
 
 ## Unsupported transformations and limits
 

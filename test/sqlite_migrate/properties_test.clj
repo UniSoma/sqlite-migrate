@@ -15,12 +15,8 @@
     [sqlite-migrate.generators :as g]
     [sqlite-migrate.jdbc :as sql-jdbc]
     [sqlite-migrate.protocols :as p]
-    [sqlite-migrate.schema :as schema]))
-
-(def ^:private trials
-  "Per-property trial count — modest by default so the suite stays
-  fast; CI raises it through the SQM_TRIALS environment variable."
-  (or (some-> (System/getenv "SQM_TRIALS") Long/parseLong) 40))
+    [sqlite-migrate.schema :as schema]
+    [sqlite-migrate.test-util :refer [trials]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Harness
