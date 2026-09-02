@@ -29,6 +29,16 @@
 (defn- kinds+sql [pl]
   (mapv (juxt :kind :sql) (:ops pl)))
 
+(defn- explanation-of
+  "The explanation of the single Refusal on the unhandled entry at
+  `path`."
+  [pl path]
+  (->> (:unhandled pl)
+    (some (fn [{:keys [entry refusals]}]
+            (when (= path (:path entry)) refusals)))
+    first
+    :explanation))
+
 (defn- refusal-codes
   "The `[class code]` pairs of every Refusal on every unhandled entry,
   keyed by the entry's path."
@@ -294,7 +304,10 @@
                ["CREATE TABLE t (a INTEGER)"])]
       (is (empty? (:ops pl)))
       (is (= {[:table "t" :column "b"] [[:needs-intent :destructive-drop]]}
-            (refusal-codes pl)))))
+            (refusal-codes pl)))
+      (is (= (str "dropping column b of table t would discard stored values;"
+               " it plans only with explicit intent (a directive)")
+            (explanation-of pl [:table "t" :column "b"])))))
   (testing "below 3.35 the drop routes through a rebuild but the intent is still owed"
     (is (= {[:table "t" :column "b"]
             [[:needs-intent :destructive-drop]]}
@@ -335,7 +348,10 @@
   (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"] [])]
     (is (empty? (:ops pl)))
     (is (= {[:table "t"] [[:needs-intent :destructive-drop]]}
-          (refusal-codes pl)))))
+          (refusal-codes pl)))
+    (is (= (str "dropping table t would discard stored values;"
+             " it plans only with explicit intent (a directive)")
+          (explanation-of pl [:table "t"])))))
 
 (deftest one-rebuild-only-entry-collapses-the-whole-table
   ;; ADR 0006: never mix in-place and rebuild for one table — the

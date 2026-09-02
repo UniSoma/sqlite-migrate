@@ -1029,12 +1029,18 @@
               :side side
               :table tname}))))
 
+(defn- entry-object
+  "A human phrase naming the object an entry is about, without the
+  entry's verb, for Refusal explanations that supply their own."
+  [{:keys [path]}]
+  (if (= 2 (count path))
+    (str "table " (second path))
+    (str (name (nth path 2)) " " (peek path) " of table " (second path))))
+
 (defn- entry-what
   "A human phrase naming an entry, for Refusal explanations."
-  [{:keys [kind path facts]}]
-  (let [obj (if (= 2 (count path))
-              (str "table " (second path))
-              (str (name (nth path 2)) " " (peek path) " of table " (second path)))]
+  [{:keys [kind facts] :as entry}]
+  (let [obj (entry-object entry)]
     (case kind
       :added (str "adding " obj)
       :removed (str "removing " obj)
@@ -1088,8 +1094,8 @@
                              (not (contains? (:authorized-col-drops routing-state) col-fold)))]
           (cond
             (not in-place?) {:rebuild (when destructive?
-                                        [(destructive-refusal (entry-what entry))])}
-            destructive? {:needs-intent [(destructive-refusal (entry-what entry))]}
+                                        [(destructive-refusal (entry-object entry))])}
+            destructive? {:needs-intent [(destructive-refusal (entry-object entry))]}
             :else {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-drop-column
                                       (get (:drop-order routing-state) col-fold)]
                            :drop-column (:path entry) #{(:path entry)}
