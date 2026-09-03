@@ -51,8 +51,9 @@ _Avoid_: equality, schema match, sameness
 
 **Noise**:
 A difference the Equivalence relation erases: identifier case and quoting,
-whitespace/comments/keyword case inside opaque expressions, ordering among named
-siblings (indexes, triggers, views), engine-internal objects.
+whitespace/comments/keyword case inside opaque expressions, parentheses wrapping the
+whole of a DEFAULT, ordering among named siblings (indexes, triggers, views),
+engine-internal objects.
 
 **Semantic difference**:
 A difference the Equivalence relation keeps — it appears in the diff. Includes

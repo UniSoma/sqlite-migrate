@@ -174,6 +174,19 @@
   [^String src toks ^long open ^long close]
   (str/trim (subs src (:e (get toks open)) (:s (get toks close)))))
 
+(defn unparenthesize
+  "`text` with every pair of parentheses that wraps the whole of it
+  removed and the remainder trimmed — `(0.01)` and `((0.01))` become
+  `0.01`; `(a) + (b)` stays, since its first `(` closes before the end.
+  Lexical only: parentheses pair by token depth, never by grammar (ADR
+  0021)."
+  [^String text]
+  (let [toks (tokenize text)
+        last-i (dec (count toks))]
+    (if (and (pos? last-i) (punct-at? toks 0 "(") (= last-i (match-paren toks 0)))
+      (recur (inner-text text toks 0 last-i))
+      (str/trim text))))
+
 (defn- find-word
   "First index in `[from end)` holding the bare word `s` at depth 0
   relative to `from`, or nil."

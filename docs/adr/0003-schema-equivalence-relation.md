@@ -1,5 +1,7 @@
 # One fixed equivalence relation over Snapshots, normalizing at comparison time
 
+> Amended by ADR 0021: parentheses wrapping the whole of a DEFAULT are Noise.
+
 "Same schema" is a single canonical relation over Snapshot values, with no
 configuration knobs. Snapshots stay verbatim (ADR 0001); all normalization happens at
 comparison time. Identifiers compare ASCII-case-insensitively with quoting ignored;

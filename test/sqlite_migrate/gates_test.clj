@@ -174,6 +174,15 @@
                        " HAVING COUNT(*) > 1 LIMIT 10")
                 :limit lim}]]
             (gates-of pl)))))
+  (testing "parentheses around the constant are Noise — the same gate, the constant spelled once (ADR 0021)"
+    (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"]
+               ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT ('x'))"
+                "CREATE UNIQUE INDEX ux ON t (b)"])]
+      (is (= [(str "SELECT ('x'), COUNT(*) AS \"sqm_count\" FROM \"t\""
+                " WHERE ('x') IS NOT NULL"
+                " GROUP BY ('x') COLLATE BINARY"
+                " HAVING COUNT(*) > 1 LIMIT 10")]
+            (mapv (comp :sql second) (gates-of pl))))))
   (testing "a new NULL-defaulted key column keeps every key distinct — no gate"
     (is (= [] (gates-of (plan-of ["CREATE TABLE t (a INTEGER)"]
                           ["CREATE TABLE t (a INTEGER, b TEXT DEFAULT NULL)"
@@ -436,7 +445,7 @@
       ;; call this a clean count of 3.
       (let [foreign-limit 3
             pl {:live-provenance {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
-                                                  first :schema_version)}
+                                                    first :schema_version)}
                 :declared-provenance {}
                 :ops [{:kind :set-not-null
                        :gates [{:code :not-null

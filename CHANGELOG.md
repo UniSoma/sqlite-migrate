@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under `:directives`. The planner is unchanged: it still receives only
   per-object Directives and no wildcard.
 
+### Fixed
+
+- Parentheses wrapping the whole of a column DEFAULT are Noise: `DEFAULT (0.01)`
+  and `DEFAULT 0.01` no longer diff as a `:default` change, and a new key column
+  defaulting to `(1)` gates as a constant instead of an opaque expression
+  (ADR 0021).
+
 ## [0.1.0] - 2026-08-10
 
 First fixed release. The earlier `0.1.0-SNAPSHOT` coordinate was a mutable

@@ -88,6 +88,24 @@
           ["CREATE TABLE t (x INTEGER, y INTEGER)"
            "CREATE INDEX idx ON t ((x+y)) WHERE x in (1,2)"]))))
 
+(deftest equivalence-erases-parentheses-wrapping-a-default
+  (testing "parentheses around the whole of a DEFAULT are Noise (ADR 0021)"
+    (is (equivalent-declarations?
+          ["CREATE TABLE t (x REAL DEFAULT (0.01), y TEXT DEFAULT ('a'), z INTEGER DEFAULT ((1 + 2)))"]
+          ["CREATE TABLE t (x REAL DEFAULT 0.01, y TEXT DEFAULT 'a', z INTEGER DEFAULT (1+2))"])))
+  (testing "the spelling inside them stays Semantic"
+    (is (not (equivalent-declarations?
+               ["CREATE TABLE t (x REAL DEFAULT (1.0))"]
+               ["CREATE TABLE t (x REAL DEFAULT 1.00)"]))))
+  (testing "only a pair spanning the whole spelling drops out"
+    (are [text expected] (= expected (x/unparenthesize text))
+      "(0.01)" "0.01"
+      "(( 0.01 ))" "0.01"
+      "0.01" "0.01"
+      "(a) + (b)" "(a) + (b)"
+      "(1" "(1"
+      "1)" "1)")))
+
 (deftest equivalence-erases-type-text-case-and-whitespace
   (is (equivalent-declarations?
         ["CREATE TABLE t (a NUMERIC, b VARCHAR (10))"]

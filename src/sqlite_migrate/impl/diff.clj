@@ -54,6 +54,13 @@
   [a b]
   (opaque= (or a "") (or b "")))
 
+(defn- default=
+  "Token comparison over two DEFAULT spellings once the parentheses
+  wrapping the whole value drop out — `(0.01)` equals `0.01` (ADR
+  0021)."
+  [a b]
+  (opaque= (some-> a x/unparenthesize) (some-> b x/unparenthesize)))
+
 ;; ---------------------------------------------------------------------------
 ;; Entry construction
 
@@ -120,7 +127,7 @@
   (cond-> #{}
     (not (type= (:type l) (:type d))) (conj :type)
     (not= (:not-null? l) (:not-null? d)) (conj :not-null?)
-    (not (opaque= (:default l) (:default d))) (conj :default)
+    (not (default= (:default l) (:default d))) (conj :default)
     (not= (fold (:collate l)) (fold (:collate d))) (conj :collate)
     (not (generated= (:generated l) (:generated d))) (conj :generated)))
 

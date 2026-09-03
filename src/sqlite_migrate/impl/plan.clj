@@ -600,9 +600,10 @@
   spelling: :null when the column defaults to NULL (no default, or the
   NULL keyword); :constant for a literal whose value every copied row
   will share (number, string, blob, TRUE/FALSE); :opaque for any other
-  expression — the planner never understands those (ADR 0015)."
+  expression — the planner never understands those (ADR 0015).
+  Parentheses wrapping the whole spelling are Noise (ADR 0021)."
   [spelling]
-  (let [s (some-> spelling str/trim)]
+  (let [s (some-> spelling x/unparenthesize)]
     (cond
       (or (nil? s) (re-matches #"(?i)NULL" s)) :null
       (or (re-matches #"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?" s)
@@ -624,9 +625,9 @@
   [pairing declared-name]
   (if-let [lc (live-col-name pairing declared-name)]
     [:live lc]
-    (let [d (:default (declared-column pairing declared-name))]
+    (let [d (some-> (:default (declared-column pairing declared-name)) x/unparenthesize)]
       (case (default-kind d)
-        :constant [:const (str "(" (str/trim d) ")")]
+        :constant [:const (str "(" d ")")]
         :null :null
         :opaque nil))))
 
