@@ -158,12 +158,15 @@
 (def gen-schema
   "Shrinkable EDN Schema values: 1-3 tables with mixed constraints and
   flags, plus escape-hatch territory — raw check/index/default
-  expressions, string types, a raw view, a raw trigger, and a raw
-  statement carrying a generated column the sugar cannot spell."
+  expressions, string types, a raw view (sometimes read by a second
+  view, so a rebuild of the first table has a chain of views to
+  carry), a raw trigger, and a raw statement carrying a generated
+  column the sugar cannot spell."
   (gen/let [tables (gen/vector-distinct-by (comp fold :name) gen-table
                      {:min-elements 1 :max-elements 3})
             fk? gen-flag
             view? gen-flag
+            chain? gen-flag
             trigger? gen-flag
             raw-table? gen-flag]
     (let [t1 (first tables)
@@ -184,13 +187,15 @@
                      [(str "CREATE TRIGGER \"tg_main\" AFTER INSERT ON "
                         (qid (:name t1)) " BEGIN SELECT 1; END")])
                    tables)
-          view (when view?
-                 (str "CREATE VIEW \"v_main\" AS SELECT "
-                   (qid (:name (first (:columns t1))))
-                   " FROM " (qid (:name t1))))]
+          col (qid (:name (first (:columns t1))))
+          views (cond-> []
+                  view? (conj (str "CREATE VIEW \"v_main\" AS SELECT " col
+                                " FROM " (qid (:name t1))))
+                  (and view? chain?) (conj (str "CREATE VIEW \"v_chain\" AS SELECT " col
+                                             " FROM \"v_main\"")))]
       (gen/return
         (cond-> {:tables tables}
-          view (assoc :views [view])
+          (seq views) (assoc :views views)
           ;; generated columns live past the sugar — raw statement hatch
           raw-table? (assoc :raw
                        ["CREATE TABLE \"zz_raw\" (\"a\" INT, \"b\" INT GENERATED ALWAYS AS (\"a\" + 1) VIRTUAL)"]))))))

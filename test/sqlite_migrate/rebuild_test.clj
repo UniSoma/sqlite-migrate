@@ -35,21 +35,35 @@
            [(:path entry) (mapv (juxt :class :code) refusals)]))
     (:unhandled pl)))
 
-(defn- converges?
+(defn- applied
   "Apply `live-decl`'s statements to a fresh live database, plan against
+  `declared-decl`, apply!, and return `(f live-conn declared-snapshot)`
+  while the live database is still open."
+  [live-decl declared-decl apply-opts f]
+  (with-open [live (sql-jdbc/in-memory)
+              pristine (sql-jdbc/in-memory)]
+    (when (seq live-decl)
+      (p/execute-batch! live (vec live-decl)))
+    (let [live-snap (m/snapshot live)
+          declared (m/declared-snapshot pristine declared-decl)
+          pl (m/plan live-snap declared (m/diff live-snap declared))]
+      (m/apply! live pl apply-opts)
+      (f live declared))))
+
+(defn- converges?
+  "Apply `live-decl` to a fresh live database, plan against
   `declared-decl`, apply!, and report whether the residual diff is
   empty. Exercises the planned SQL against real SQLite."
   ([live-decl declared-decl] (converges? live-decl declared-decl {}))
   ([live-decl declared-decl apply-opts]
-    (with-open [live (sql-jdbc/in-memory)
-                pristine (sql-jdbc/in-memory)]
-      (when (seq live-decl)
-        (p/execute-batch! live (vec live-decl)))
-      (let [live-snap (m/snapshot live)
-            declared (m/declared-snapshot pristine declared-decl)
-            pl (m/plan live-snap declared (m/diff live-snap declared))]
-        (m/apply! live pl apply-opts)
-        (not (m/drift? (m/diff (m/snapshot live) declared)))))))
+    (applied live-decl declared-decl apply-opts
+      (fn [live declared] (not (m/drift? (m/diff (m/snapshot live) declared)))))))
+
+(defn- statement-position
+  "The index of the first statement in `sql` containing `needle`, or
+  nil."
+  [sql needle]
+  (first (keep-indexed (fn [i ^String s] (when (.contains s needle) i)) sql)))
 
 ;; ---------------------------------------------------------------------------
 ;; The composite op and its locked internal statement order (ADR 0006)
@@ -175,10 +189,7 @@
       (is (= [:rebuild-table] (mapv :kind (:ops pl))))
       (is (empty? (:unhandled pl))))
     (testing "dependents drop before the old table and recreate after the rename"
-      (let [sql (:sql (first (:ops pl)))
-            pos (fn [needle] (first (keep-indexed
-                                      (fn [i ^String s] (when (.contains s needle) i))
-                                      sql)))]
+      (let [pos (partial statement-position (:sql (first (:ops pl))))]
         (is (< (pos "DROP VIEW \"t_view\"") (pos "DROP TABLE \"t\"")))
         (is (< (pos "DROP TRIGGER \"watcher_trg\"") (pos "DROP TABLE \"t\"")))
         (is (< (pos "RENAME TO \"t\"") (pos "CREATE INDEX t_idx")))
@@ -213,6 +224,72 @@
         (is (empty? (p/execute-query live
                       "SELECT name FROM sqlite_schema WHERE name IN ('gone', 'gone_t')" [])))
         (is (not (m/drift? (m/diff (m/snapshot live) declared))))))))
+
+(deftest rebuild-recreates-a-view-that-reads-the-table-through-another-view
+  ;; a_outer names only z_inner, yet the rename reparses it after
+  ;; z_inner is gone; the names run against dependency order, so the
+  ;; recreate must follow what each view reads, not its name
+  (let [shared ["CREATE VIEW z_inner AS SELECT a FROM t"
+                "CREATE VIEW a_outer AS SELECT a FROM z_inner"]
+        live (into ["CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"] shared)
+        declared (into ["CREATE TABLE t (a INTEGER, UNIQUE (a))"] shared)
+        pl (plan-of live declared)
+        pos (partial statement-position (:sql (first (:ops pl))))]
+    (is (= [:rebuild-table] (mapv :kind (:ops pl))))
+    (testing "the outer view drops before the inner one and recreates after it"
+      (is (< (pos "DROP VIEW \"a_outer\"") (pos "DROP VIEW \"z_inner\"") (pos "DROP TABLE \"t\"")))
+      (is (< (pos "RENAME TO \"t\"") (pos "CREATE VIEW z_inner") (pos "CREATE VIEW a_outer"))))
+    (testing "apply! succeeds and the file is Equivalent to the declared shape"
+      (is (converges? live declared)))
+    (testing "both views stand and read the copied rows"
+      (is (= [{:a 1} {:a 2}]
+            (applied (conj live "INSERT INTO t VALUES (1), (2)") declared {}
+              (fn [conn _] (p/execute-query conn "SELECT a FROM a_outer ORDER BY a" []))))))))
+
+(deftest rebuild-recreates-a-mention-cycle-of-views-in-name-order
+  ;; z_src's column alias is a false mention of a_top, closing a cycle
+  ;; with the real reads a_top -> m_mid -> z_src; dependency order would
+  ;; give z_src, m_mid, a_top
+  (let [shared ["CREATE VIEW z_src AS SELECT a AS a_top FROM t"
+                "CREATE VIEW m_mid AS SELECT a_top FROM z_src"
+                "CREATE VIEW a_top AS SELECT a_top FROM m_mid"]
+        live (into ["CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"] shared)
+        declared (into ["CREATE TABLE t (a INTEGER, UNIQUE (a))"] shared)
+        pos (partial statement-position (:sql (first (:ops (plan-of live declared)))))]
+    (is (< (pos "RENAME TO \"t\"") (pos "CREATE VIEW a_top") (pos "CREATE VIEW m_mid")
+          (pos "CREATE VIEW z_src"))
+      "the cycle's members recreate in name order")
+    (is (converges? live declared) "apply! succeeds and the file is Equivalent")))
+
+(deftest rebuild-recreates-another-tables-trigger-that-reads-a-dependent-view
+  ;; w_trg names v1, never t — the rename still reparses it after the
+  ;; Rebuild has dropped v1
+  (let [shared ["CREATE TABLE w (n)"
+                "CREATE VIEW v1 AS SELECT a FROM t"
+                "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT a FROM v1; END"]
+        live (into ["CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"] shared)
+        declared (into ["CREATE TABLE t (a INTEGER, UNIQUE (a))"] shared)
+        pos (partial statement-position (:sql (first (:ops (plan-of live declared)))))]
+    (testing "the trigger drops before the old table and recreates after the rename"
+      (is (< (pos "DROP TRIGGER \"w_trg\"") (pos "DROP TABLE \"t\"")))
+      (is (< (pos "RENAME TO \"t\"") (pos "CREATE TRIGGER w_trg"))))
+    (testing "apply! succeeds and the file is Equivalent to the declared shape"
+      (is (converges? live declared)))))
+
+(deftest rebuild-keeps-an-instead-of-trigger-on-a-view-that-reads-the-table-through-another-view
+  (let [shared ["CREATE VIEW v1 AS SELECT a FROM t"
+                "CREATE VIEW v2 AS SELECT a FROM v1"
+                "CREATE TRIGGER v2_ins INSTEAD OF INSERT ON v2 BEGIN INSERT INTO t VALUES (new.a); END"]
+        live (into ["CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"] shared)
+        declared (into ["CREATE TABLE t (a INTEGER, UNIQUE (a))"] shared)]
+    (testing "apply! succeeds and the file is Equivalent to the declared shape"
+      (is (converges? live declared)))
+    (testing "the INSTEAD OF trigger stands and still fires"
+      (is (= [{:a 7}]
+            (applied live declared {}
+              (fn [conn _]
+                (p/execute-batch! conn ["INSERT INTO v2 VALUES (7)"])
+                (p/execute-query conn "SELECT a FROM t" []))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Data preservation (ADR 0010): multiset row survival, rowid stability,

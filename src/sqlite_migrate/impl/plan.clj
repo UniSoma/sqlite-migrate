@@ -453,27 +453,81 @@
        " FROM sqlite_sequence AS s WHERE s.name = " live
        " AND NOT EXISTS (SELECT 1 FROM sqlite_sequence AS s2 WHERE s2.name = " temp ")")]))
 
+(defn- dependent-view-folds
+  "The folded names of the `views` that lexically mention the table
+  `tfold`, or a view already in the set."
+  [views tfold]
+  (loop [closure #{} frontier #{tfold}]
+    (if (empty? frontier)
+      closure
+      (let [added (into #{}
+                    (keep (fn [{:keys [name sql]}]
+                            (let [f (u/fold-name name)]
+                              (when (and (not (contains? closure f))
+                                      (some #(lex/mentions? sql %) frontier))
+                                f))))
+                    views)]
+        (recur (into closure added) added)))))
+
+(defn- reachable
+  "The folds reachable from `f` along `reads` edges."
+  [reads f]
+  (loop [seen #{} todo (vec (reads f))]
+    (if-let [g (peek todo)]
+      (if (contains? seen g)
+        (recur seen (pop todo))
+        (recur (conj seen g) (into (pop todo) (reads g))))
+      seen)))
+
+(defn- dependency-order
+  "`views` ordered so each follows the views among them it lexically
+  mentions, ties by folded name. The members of a cycle — only a
+  conservative false mention can close one — take name order among
+  themselves."
+  [views]
+  (let [by-fold (into (sorted-map) (map (juxt (comp u/fold-name :name) identity)) views)
+        reads (into {}
+                (for [[f v] by-fold]
+                  [f (into #{}
+                       (filter #(and (not= f %) (lex/mentions? (:sql v) %)))
+                       (keys by-fold))]))
+        reach (into {} (map (juxt identity #(reachable reads %))) (keys by-fold))
+        cycle-of (fn [f] (into (sorted-set f) (filter #(contains? (reach %) f)) (reach f)))]
+    (loop [placed [] pending (into (sorted-set) (keys by-fold))]
+      (if (empty? pending)
+        placed
+        (let [members (some (fn [f]
+                              (let [group (cycle-of f)]
+                                (when (not-any? #(and (pending %) (not (group %)))
+                                        (mapcat reads group))
+                                  group)))
+                        pending)]
+          (recur (into placed (map by-fold) members) (reduce disj pending members)))))))
+
 (defn- rebuild-dependents
   "The surviving views and triggers the rebuild must drop and recreate
   around its rename: SQLite reparses every view and trigger during
   ALTER TABLE RENAME, so any survivor that lexically references the
-  rebuilt table would fail the rename while the old table is gone.
-  Returns `{:views [...] :triggers [...]}` — referencing views with
-  their surviving triggers, plus standalone referencing triggers of
-  other parents."
+  rebuilt table, or a view the rebuild drops, would fail the rename.
+  Returns `{:views [...] :triggers [...]}` — every view that reads the
+  table directly or through another such view, in dependency order and
+  with its surviving triggers, plus the triggers of other parents that
+  reference the table or one of those views."
   [{:keys [views table-triggers]} tfold]
-  (let [dep-views (filterv #(lex/mentions? (:sql %) tfold) views)
-        dep-view-folds (into #{} (map (comp u/fold-name :name)) dep-views)
+  (let [dep-view-folds (dependent-view-folds views tfold)
+        referenced (conj dep-view-folds tfold)
+        references? (fn [sql] (some #(lex/mentions? sql %) referenced))
         loose-view-triggers (for [v views
                                   :when (not (contains? dep-view-folds (u/fold-name (:name v))))
                                   trg (:triggers v)
-                                  :when (lex/mentions? (:sql trg) tfold)]
+                                  :when (references? (:sql trg))]
                               trg)
         loose-table-triggers (for [trg table-triggers
                                    :when (and (not= tfold (u/fold-name (:table trg)))
-                                           (lex/mentions? (:sql trg) tfold))]
+                                           (references? (:sql trg)))]
                                trg)]
-    {:views dep-views
+    {:views (dependency-order
+              (filterv #(contains? dep-view-folds (u/fold-name (:name %))) views))
      :triggers (vec (concat loose-view-triggers loose-table-triggers))}))
 
 (defn- rebuild-stage-sqls
@@ -490,10 +544,10 @@
 (defn- rebuild-swap-sqls
   "The rebuild's swap statements: drop the dependents that would break
   the rename, drop the old table, rename the staged table into place —
-  never rename-first."
+  never rename-first. Views drop in reverse dependency order."
   [temp {:keys [live-table declared-table]} deps]
   (-> []
-    (into (map #(str "DROP VIEW " (u/quote-identifier (:name %)))) (:views deps))
+    (into (map #(str "DROP VIEW " (u/quote-identifier (:name %)))) (rseq (:views deps)))
     (into (map #(str "DROP TRIGGER " (u/quote-identifier (:name %)))) (:triggers deps))
     (conj (str "DROP TABLE " (u/quote-identifier (:name live-table))))
     (conj (str "ALTER TABLE " (u/quote-identifier temp)
@@ -501,8 +555,8 @@
 
 (defn- rebuild-recreate-sqls
   "The rebuild's recreate statements: the declared table's indexes and
-  triggers, then the dropped dependent views (each with its triggers)
-  and standalone dependent triggers."
+  triggers, then the dropped dependent views in dependency order (each
+  with its triggers) and standalone dependent triggers."
   [declared-table deps]
   (-> []
     (into (for [[_ idx] (sort-by key (:indexes declared-table))]

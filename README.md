@@ -120,8 +120,10 @@ A Rebuild keeps the `rowid` when the two sides are rowid tables. It also moves t
 second time.
 
 SQLite reads each view and each trigger a second time during the rename in the
-Rebuild. For this reason, the Rebuild drops each view and each trigger that refers
-to the table, and then creates them again.
+Rebuild. For this reason, the Rebuild drops each view that reads the table, and
+each view that reads the table through a chain of views. It also drops each trigger
+that refers to the table or to one of those views. Then it creates them again. It
+creates each view after the views that it reads.
 
 A Gate examines the rows of the live table before a change that adds a constraint
 or makes a constraint more strict. A Gate can do this for these constraints:

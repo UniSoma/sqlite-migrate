@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Rebuild drops and re-creates each view that reads the rebuilt table through
+  a chain of views, and each trigger that refers to one of those views. It used to
+  drop only the views and triggers that named the table itself. The rename at
+  the end of the Rebuild then failed on a view or trigger that read a view the
+  Rebuild had dropped, and `apply!` rolled back. The Rebuild re-creates each
+  view after the views it reads.
 - A Rebuild no longer drops and re-creates the triggers of a table that a
   `:drop-table` Directive removes in the same Plan. Those triggers leave with
   their table. When a trigger's body named a rebuilt table, the Rebuild used to
