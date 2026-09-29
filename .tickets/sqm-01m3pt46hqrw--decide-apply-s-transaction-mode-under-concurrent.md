@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:58.871007203Z'
-updated: '2026-09-29T16:40:20.728157459Z'
+updated: '2026-09-29T20:07:47.802920399Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
@@ -25,3 +25,7 @@ Decide: `BEGIN IMMEDIATE` (or `EXCLUSIVE`) as part of the Frame contract, so eve
 **2026-09-29T16:40:20.728157459Z**
 
 Data point from the first-consumer assessment: the consumer migrates a staged copy of the file and then registers it as a new Snapshot (the stage-then-swap recipe). A single-writer rule plus the staged copy keep it away from concurrent writers, so this consumer puts no pressure on the transaction-mode decision.
+
+**2026-09-29T20:07:47.802920399Z**
+
+Data point from "Measure Rebuild cost on a large table" (docs/research/rebuild-cost.md on branch research/rebuild-cost, "Readers during a Rebuild"). A second connection with busy_timeout 0 read every 2 ms during a 1M-row apply!. In rollback-journal mode SQLite refused 712 of 716 reads (longest refusal 1.53 s of a 1.55 s Apply), and 1555 of 1605 in the UNIQUE case (3.33 s of 3.44 s). The default 2 MB page cache spills early, so the Frame holds the EXCLUSIVE lock for almost the whole transaction. In WAL mode SQLite refused no read. sqlite-jdbc's default busy_timeout is 3000 ms, so a reader on another sqlite-jdbc connection fails with SQLITE_BUSY during any rollback-journal Rebuild longer than 3 s. 10M-row Rebuilds took 19 to 111 s, and writers wait that long in both modes. The Frame's PRAGMA foreign_key_check scans every foreign key in the file (0.4 to 2.6 s at 10M rows), so it lengthens the write lock for every Plan, not only a large one.
