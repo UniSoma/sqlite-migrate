@@ -1,5 +1,9 @@
 # Gate bidirectionality corners: new-column keys and the exact STRICT text rule
 
+> Amended by ADR 0022: the DEFAULT classification also routes added
+> columns, and the `:empty-table` Gate carries an in-place ADD COLUMN from
+> SQLite 3.32.
+
 Two corners where the shipped gate inventory broke the bidirectionality
 property (ADR 0010, property 3), and the decisions that close them.
 
