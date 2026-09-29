@@ -7,7 +7,7 @@
   rendered text is never a parse contract; the EDN values are the
   machine surface."
   (:require [clojure.string :as str]
-    [sqlite-migrate.impl.extract :as x]))
+    [sqlite-migrate.impl.util :as u]))
 
 (defn- fact-value
   "The rendered value of one differing fact on one side's sub-value.
@@ -36,7 +36,7 @@
   SQL the Snapshot never held is against the verbatim-truth grain
   (ADR 0005)."
   [v]
-  (let [nested (fn [m] (map val (sort-by (comp x/fold-name key) m)))]
+  (let [nested (fn [m] (map val (sort-by (comp u/fold-name key) m)))]
     (concat
       [(if-let [sql (:sql v)]
          (indent-sql sql)

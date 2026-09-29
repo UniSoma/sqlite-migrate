@@ -28,8 +28,7 @@
   Public surface: `against`, `rename-tables`, `rename-columns`,
   `drop-tables`, `drop-columns`, `build`. All pure. Depends on the
   Diff shape and the identifier fold only — never on the planner."
-  (:require [sqlite-migrate.impl.extract :as x]
-    [sqlite-migrate.impl.util :as u]))
+  (:require [sqlite-migrate.impl.util :as u]))
 
 (defn- diff?
   "True when `x` has the shape of a Diff: an `:entries` vector plus
@@ -57,7 +56,7 @@
   "The `[k v]` pairs of `m` sorted by folded key, so a map's iteration
   order never leaks into the output."
   [m]
-  (sort-by (comp x/fold-name key) m))
+  (sort-by (comp u/fold-name key) m))
 
 (defn rename-tables
   "Append one `:rename-table` Directive per entry of `renames`, a map
@@ -88,7 +87,7 @@
   [{:keys [directives]}]
   (into #{}
     (comp (filter #(= :rename-table (:directive %)))
-      (map (comp x/fold-name :from)))
+      (map (comp u/fold-name :from)))
     directives))
 
 (defn- claimed-columns
@@ -97,7 +96,7 @@
   [{:keys [directives]}]
   (into #{}
     (comp (filter #(= :rename-column (:directive %)))
-      (map (juxt (comp x/fold-name :table) (comp x/fold-name :from))))
+      (map (juxt (comp u/fold-name :table) (comp u/fold-name :from))))
     directives))
 
 (defn- selection
@@ -105,7 +104,7 @@
   nil when no list was given and every removed object qualifies."
   [names]
   (when names
-    (into #{} (map x/fold-name) names)))
+    (into #{} (map u/fold-name) names)))
 
 (defn- selected? [wanted folded-name]
   (or (nil? wanted) (contains? wanted folded-name)))
@@ -143,7 +142,7 @@
           wanted (selection names)]
       (append directive-set
         (for [{[_ table] :path} (removed-tables directive-set)
-              :let [folded (x/fold-name table)]
+              :let [folded (u/fold-name table)]
               :when (and (not (claimed folded)) (selected? wanted folded))]
           {:directive :drop-table :table table})))))
 
@@ -160,8 +159,8 @@
           wanted (selection tables)]
       (append directive-set
         (for [{[_ table _ column] :path} (removed-columns directive-set)
-              :let [folded-table (x/fold-name table)]
-              :when (and (not (claimed [folded-table (x/fold-name column)]))
+              :let [folded-table (u/fold-name table)]
+              :when (and (not (claimed [folded-table (u/fold-name column)]))
                       (selected? wanted folded-table))]
           {:directive :drop-column :table table :column column})))))
 

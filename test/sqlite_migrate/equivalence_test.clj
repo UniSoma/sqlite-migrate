@@ -1,11 +1,10 @@
 (ns sqlite-migrate.equivalence-test
-  "The Equivalence relation (ADR 0003): the lexical tokenizer covers
-  SQLite's token classes and nothing more, and the relation erases the
-  locked Noise classes while keeping the locked Semantic differences —
-  on Snapshots taken from real in-memory SQLite."
-  (:require [clojure.test :refer [are deftest is testing]]
+  "The Equivalence relation (ADR 0003): the relation erases the locked
+  Noise classes while keeping the locked Semantic differences — on
+  Snapshots taken from real in-memory SQLite. The tokenizer and DEFAULT
+  Noise on their own are `sqlite-migrate.lexical-test`'s."
+  (:require [clojure.test :refer [deftest is testing]]
     [sqlite-migrate.core :as m]
-    [sqlite-migrate.impl.extract :as x]
     [sqlite-migrate.jdbc :as sql-jdbc]))
 
 (defn- snap
@@ -17,50 +16,6 @@
 
 (defn- equivalent-declarations? [a b]
   (not (m/drift? (m/diff (snap a) (snap b)))))
-
-;; ---------------------------------------------------------------------------
-;; Tokenizer: SQLite token classes, nothing more
-
-(defn- kinds+texts [src]
-  (mapv (juxt :t :text) (x/tokenize src)))
-
-(deftest tokenizer-covers-sqlite-token-classes
-  (testing "whitespace and both comment styles vanish"
-    (is (= [] (kinds+texts "  \t\n")))
-    (is (= [[:word "a"] [:word "b"]] (kinds+texts "a -- line comment\nb")))
-    (is (= [[:word "a"] [:word "b"]] (kinds+texts "a /* block\ncomment */ b")))
-    (is (= [[:word "a"]] (kinds+texts "a -- unterminated line comment")))
-    (is (= [[:word "a"]] (kinds+texts "a /* unterminated block"))))
-  (testing "bare words carry dequoted folded identifiers"
-    (is (= [{:t :word :s 0 :e 6 :text "SELECT" :ident "SELECT" :fold "select"}]
-          (x/tokenize "SELECT"))))
-  (testing "quoted identifiers in all three quoting styles dequote and fold"
-    (are [src ident] (= [ident] (mapv :fold (x/tokenize src)))
-      "\"Group\"" "group"
-      "`Group`" "group"
-      "[Group]" "group"
-      "\"a\"\"b\"" "a\"b"))
-  (testing "string literals keep their verbatim text, doubled quotes included"
-    (is (= [[:str "'it''s'"]] (kinds+texts "'it''s'"))))
-  (testing "blob literals are one token"
-    (is (= [[:blob "x'CAFE'"]] (kinds+texts "x'CAFE'")))
-    (is (= [[:blob "X'CAFE'"]] (kinds+texts "X'CAFE'"))))
-  (testing "numeric literals: integers, decimals, hex, leading dot, signed exponents"
-    (are [src] (= [[:num src]] (kinds+texts src))
-      "42"
-      "1.5"
-      "0x1A"
-      ".5"
-      "1e5"
-      "1e+5"
-      "1.5E-3"))
-  (testing "a dot not followed by a digit stays punctuation"
-    (is (= [[:word "a"] [:punct "."] [:word "b"]] (kinds+texts "a.b"))))
-  (testing "a sign after a hex literal is an operator, not an exponent"
-    (is (= [[:num "0x1E"] [:punct "+"] [:num "5"]] (kinds+texts "0x1E+5"))))
-  (testing "operators and punctuation come out as punct tokens"
-    (is (= [[:word "a"] [:punct "<"] [:punct ">"] [:word "b"]]
-          (kinds+texts "a <> b")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Noise: differences the Equivalence relation erases
@@ -96,15 +51,7 @@
   (testing "the spelling inside them stays Semantic"
     (is (not (equivalent-declarations?
                ["CREATE TABLE t (x REAL DEFAULT (1.0))"]
-               ["CREATE TABLE t (x REAL DEFAULT 1.00)"]))))
-  (testing "only a pair spanning the whole spelling drops out"
-    (are [text expected] (= expected (x/unparenthesize text))
-      "(0.01)" "0.01"
-      "(( 0.01 ))" "0.01"
-      "0.01" "0.01"
-      "(a) + (b)" "(a) + (b)"
-      "(1" "(1"
-      "1)" "1)")))
+               ["CREATE TABLE t (x REAL DEFAULT 1.00)"])))))
 
 (deftest equivalence-erases-type-text-case-and-whitespace
   (is (equivalent-declarations?

@@ -4,152 +4,16 @@
   bodies, generated/index/partial expressions, DEFAULT spellings,
   constraint names, per-column COLLATE, AUTOINCREMENT, FK deferrability.
 
-  Lexical only: SQLite's token classes (bare and quoted identifiers,
-  strings, blobs, numbers, comments, punctuation) plus parenthesis
-  depth. Never a SQL parser; expression text is carried verbatim, never
-  understood."
-  (:require [clojure.string :as str]))
+  Lexical only: reads the token stream of `sqlite-migrate.impl.lexical`
+  for keywords and spans. Never a SQL parser; expression text is
+  carried verbatim, never understood."
+  (:require [clojure.string :as str]
+    [sqlite-migrate.impl.lexical :as lex]))
 
 (set! *warn-on-reflection* true)
 
 ;; ---------------------------------------------------------------------------
-;; Tokenizer
-
-(defn fold-name
-  "Case-fold an identifier for pairing extracted facts with pragma
-  rows. Folding is for matching only; Snapshots keep original
-  spellings."
-  ^String [^String s]
-  (.toLowerCase s java.util.Locale/ROOT))
-
-(defn- scan-quoted
-  "Position just past the closing `q` of a quoted region starting at
-  `i` (first char after the opening quote), honouring doubled-quote
-  escapes."
-  ^long [^String src ^long i q]
-  (let [n (.length src)]
-    (loop [j i]
-      (cond
-        (>= j n) n
-        (= (.charAt src j) ^char q)
-        (if (and (< (inc j) n) (= (.charAt src (inc j)) ^char q))
-          (recur (+ j 2))
-          (inc j))
-        :else (recur (inc j))))))
-
-(defn- scan-number
-  "Position just past the numeric literal starting at `i`: digits,
-  dots, hex digits after a `0x` prefix, and a signed exponent
-  (`1e+5`) — the sign is consumed only when the literal is not hex,
-  follows an `e`/`E`, and is itself followed by a digit."
-  ^long [^String src ^long i]
-  (let [n (.length src)
-        hex? (and (= \0 (.charAt src i)) (< (inc i) n)
-               (let [x (.charAt src (inc i))] (or (= x \x) (= x \X))))]
-    (loop [j (inc i)]
-      (if (>= j n)
-        j
-        (let [d (.charAt src j)]
-          (cond
-            (or (Character/isLetterOrDigit d) (= d \.)) (recur (inc j))
-            (and (or (= d \+) (= d \-))
-              (not hex?)
-              (let [p (.charAt src (dec j))] (or (= p \e) (= p \E)))
-              (< (inc j) n)
-              (Character/isDigit (.charAt src (inc j)))) (recur (inc j))
-            :else j))))))
-
-(defn- word-start? [c]
-  (or (Character/isLetter (char c)) (= c \_)))
-
-(defn- word-char? [c]
-  (or (Character/isLetterOrDigit (char c)) (= c \_) (= c \$)))
-
-(defn tokenize
-  "Tokenize `src` by SQLite's lexical rules into a vector of tokens
-  `{:t kind :s start :e end :text verbatim}` — kinds `:word`, `:qid`,
-  `:str`, `:blob`, `:num`, `:punct`. Words and quoted identifiers also
-  carry `:ident` (dequoted, original case) and `:fold` (dequoted,
-  ASCII-folded). Whitespace and comments vanish."
-  [^String src]
-  (let [n (.length src)]
-    (loop [i 0 acc []]
-      (if (>= i n)
-        acc
-        (let [c (.charAt src i)]
-          (cond
-            (Character/isWhitespace c)
-            (recur (inc i) acc)
-
-            (and (= c \-) (< (inc i) n) (= (.charAt src (inc i)) \-))
-            (let [j (.indexOf src "\n" (int i))]
-              (recur (long (if (neg? j) n (inc j))) acc))
-
-            (and (= c \/) (< (inc i) n) (= (.charAt src (inc i)) \*))
-            (let [j (.indexOf src "*/" (int (+ i 2)))]
-              (recur (long (if (neg? j) n (+ j 2))) acc))
-
-            (= c \')
-            (let [j (scan-quoted src (inc i) \')]
-              (recur j (conj acc {:t :str :s i :e j :text (subs src i j)})))
-
-            (or (= c \") (= c \`))
-            (let [j (scan-quoted src (inc i) c)
-                  raw (subs src (inc i) (max (inc i) (dec j)))
-                  qq (str c c)
-                  ident (if (neg? (.indexOf raw qq)) raw (str/replace raw qq (str c)))]
-              (recur j (conj acc {:t :qid :s i :e j :text (subs src i j)
-                                  :ident ident :fold (fold-name ident)})))
-
-            (= c \[)
-            (let [k (.indexOf src "]" (int i))
-                  j (long (if (neg? k) n (inc k)))
-                  ident (subs src (inc i) (if (neg? k) n k))]
-              (recur j (conj acc {:t :qid :s i :e j :text (subs src i j)
-                                  :ident ident :fold (fold-name ident)})))
-
-            (or (Character/isDigit c)
-              (and (= c \.) (< (inc i) n)
-                (Character/isDigit (.charAt src (inc i)))))
-            (let [j (scan-number src i)]
-              (recur j (conj acc {:t :num :s i :e j :text (subs src i j)})))
-
-            (word-start? c)
-            (let [j (long (loop [j (inc i)]
-                            (if (and (< j n) (word-char? (.charAt src j)))
-                              (recur (inc j))
-                              j)))
-                  text (subs src i j)]
-              (if (and (= 1 (count text)) (or (= c \x) (= c \X))
-                    (< j n) (= (.charAt src j) \'))
-                (let [k (scan-quoted src (inc j) \')]
-                  (recur k (conj acc {:t :blob :s i :e k :text (subs src i k)})))
-                (recur j (conj acc {:t :word :s i :e j :text text
-                                    :ident text :fold (fold-name text)}))))
-
-            :else
-            (recur (inc i) (conj acc {:t :punct :s i :e (inc i) :text (str c)}))))))))
-
-;; ---------------------------------------------------------------------------
 ;; Token-stream helpers
-
-(defn- word-at? [toks i s]
-  (let [tok (get toks i)]
-    (and (= :word (:t tok)) (= s (:fold tok)))))
-
-(defn- punct-at? [toks i s]
-  (let [tok (get toks i)]
-    (and (= :punct (:t tok)) (= s (:text tok)))))
-
-(defn- match-paren
-  "Index of the `)` matching the `(` at `open`."
-  ^long [toks ^long open]
-  (loop [i (inc open) depth 0]
-    (cond
-      (>= i (count toks)) i
-      (punct-at? toks i "(") (recur (inc i) (inc depth))
-      (punct-at? toks i ")") (if (zero? depth) i (recur (inc i) (dec depth)))
-      :else (recur (inc i) depth))))
 
 (defn- split-commas
   "Ranges `[start end)` of the depth-0 comma-separated segments between
@@ -158,9 +22,9 @@
   (loop [i (inc open) start (inc open) depth 0 acc []]
     (cond
       (>= i close) (if (< start close) (conj acc [start close]) acc)
-      (punct-at? toks i "(") (recur (inc i) start (inc depth) acc)
-      (punct-at? toks i ")") (recur (inc i) start (dec depth) acc)
-      (and (zero? depth) (punct-at? toks i ","))
+      (lex/punct-at? toks i "(") (recur (inc i) start (inc depth) acc)
+      (lex/punct-at? toks i ")") (recur (inc i) start (dec depth) acc)
+      (and (zero? depth) (lex/punct-at? toks i ","))
       (recur (inc i) (inc i) depth (conj acc [start i]))
       :else (recur (inc i) start depth acc))))
 
@@ -174,19 +38,6 @@
   [^String src toks ^long open ^long close]
   (str/trim (subs src (:e (get toks open)) (:s (get toks close)))))
 
-(defn unparenthesize
-  "`text` with every pair of parentheses that wraps the whole of it
-  removed and the remainder trimmed — `(0.01)` and `((0.01))` become
-  `0.01`; `(a) + (b)` stays, since its first `(` closes before the end.
-  Lexical only: parentheses pair by token depth, never by grammar (ADR
-  0021)."
-  [^String text]
-  (let [toks (tokenize text)
-        last-i (dec (count toks))]
-    (if (and (pos? last-i) (punct-at? toks 0 "(") (= last-i (match-paren toks 0)))
-      (recur (inner-text text toks 0 last-i))
-      (str/trim text))))
-
 (defn- find-word
   "First index in `[from end)` holding the bare word `s` at depth 0
   relative to `from`, or nil."
@@ -194,9 +45,9 @@
   (loop [i from depth 0]
     (cond
       (>= i end) nil
-      (punct-at? toks i "(") (recur (inc i) (inc depth))
-      (punct-at? toks i ")") (recur (inc i) (dec depth))
-      (and (zero? depth) (word-at? toks i s)) i
+      (lex/punct-at? toks i "(") (recur (inc i) (inc depth))
+      (lex/punct-at? toks i ")") (recur (inc i) (dec depth))
+      (and (zero? depth) (lex/word-at? toks i s)) i
       :else (recur (inc i) depth))))
 
 (defn- find-punct
@@ -204,17 +55,17 @@
   [toks ^long from ^long end s]
   (loop [i from]
     (when (< i end)
-      (if (punct-at? toks i s) i (recur (inc i))))))
+      (if (lex/punct-at? toks i s) i (recur (inc i))))))
 
 (defn- deferrability
   "Verbatim `[NOT] DEFERRABLE [INITIALLY DEFERRED|IMMEDIATE]` clause in
   token range `[from end)`, or nil."
   [^String src toks ^long from ^long end]
   (when-let [d (find-word toks from end "deferrable")]
-    (let [start (if (and (> d from) (word-at? toks (dec d) "not")) (dec d) d)
-          stop (if (and (word-at? toks (inc d) "initially")
-                     (or (word-at? toks (+ d 2) "deferred")
-                       (word-at? toks (+ d 2) "immediate")))
+    (let [start (if (and (> d from) (lex/word-at? toks (dec d) "not")) (dec d) d)
+          stop (if (and (lex/word-at? toks (inc d) "initially")
+                     (or (lex/word-at? toks (+ d 2) "deferred")
+                       (lex/word-at? toks (+ d 2) "immediate")))
                  (+ d 2)
                  d)]
       (span-text src toks start stop))))
@@ -228,11 +79,11 @@
   single literal. Returns `[text next-index]`."
   [^String src toks ^long i]
   (cond
-    (punct-at? toks i "(")
-    (let [close (match-paren toks i)]
+    (lex/punct-at? toks i "(")
+    (let [close (lex/match-paren toks i)]
       [(span-text src toks i close) (inc close)])
 
-    (or (punct-at? toks i "+") (punct-at? toks i "-"))
+    (or (lex/punct-at? toks i "+") (lex/punct-at? toks i "-"))
     [(span-text src toks i (inc i)) (+ i 2)]
 
     :else
@@ -246,28 +97,28 @@
   before the next constraint keyword (CHECK, DEFAULT, NOT NULL, ...)."
   ^long [toks ^long i ^long b]
   (let [j (+ i 2) ; past REFERENCES and the table name
-        j (long (if (and (< j b) (punct-at? toks j "("))
-                  (inc (match-paren toks j))
+        j (long (if (and (< j b) (lex/punct-at? toks j "("))
+                  (inc (lex/match-paren toks j))
                   j))]
     (loop [j j]
       (if (>= j b)
         b
         (cond
           ;; ON DELETE|UPDATE {SET NULL|SET DEFAULT|CASCADE|RESTRICT|NO ACTION}
-          (word-at? toks j "on")
+          (lex/word-at? toks j "on")
           (let [k (+ j 2)]
             (recur (long (cond
-                           (or (word-at? toks k "set") (word-at? toks k "no")) (+ k 2)
+                           (or (lex/word-at? toks k "set") (lex/word-at? toks k "no")) (+ k 2)
                            :else (inc k)))))
 
-          (word-at? toks j "match")
+          (lex/word-at? toks j "match")
           (recur (+ j 2))
 
-          (and (word-at? toks j "not") (word-at? toks (inc j) "deferrable"))
+          (and (lex/word-at? toks j "not") (lex/word-at? toks (inc j) "deferrable"))
           (recur (+ j 2))
 
-          (word-at? toks j "deferrable")
-          (recur (long (if (word-at? toks (inc j) "initially")
+          (lex/word-at? toks j "deferrable")
+          (recur (long (if (lex/word-at? toks (inc j) "initially")
                          (+ j 3)
                          (inc j))))
 
@@ -277,8 +128,8 @@
   "When token `i` opens a parenthesized group, `[index-past-close
   inner-text]`; else nil."
   [^String src toks ^long i]
-  (when (punct-at? toks i "(")
-    (let [close (match-paren toks i)]
+  (when (lex/punct-at? toks i "(")
+    (let [close (lex/match-paren toks i)]
       [(inc close) (inner-text src toks i close)])))
 
 (defn- column-def
@@ -323,12 +174,12 @@
 (defn- table-constraint
   "Fold one table-constraint token range into the accumulator."
   [^String src toks acc [^long a ^long b]]
-  (let [[cname c] (if (word-at? toks a "constraint")
+  (let [[cname c] (if (lex/word-at? toks a "constraint")
                     [(:ident (get toks (inc a))) (+ a 2)]
                     [nil a])
         kind (:fold (get toks c))
         open (find-punct toks c b "(")
-        close (when open (match-paren toks open))
+        close (when open (lex/match-paren toks open))
         column-names (fn []
                        (mapv (fn [[s _]] (:ident (get toks s)))
                          (split-commas toks open close)))]
@@ -366,9 +217,9 @@
     :pk-name name-or-nil :autoincrement? bool}` — all text verbatim,
   constraint sequences in source order."
   [^String sql]
-  (let [toks (tokenize sql)
+  (let [toks (lex/tokenize sql)
         open (find-punct toks 0 (count toks) "(")
-        close (when open (match-paren toks open))
+        close (when open (lex/match-paren toks open))
         init {:defaults {} :collates {} :generated {}
               :checks [] :uniques [] :fks []
               :pk-name nil :autoincrement? false}]
@@ -392,24 +243,24 @@
   indexed position, verbatim expression text for expression positions
   (nil for plain named columns), and the partial-index WHERE clause."
   [^String sql]
-  (let [toks (tokenize sql)
+  (let [toks (lex/tokenize sql)
         n (count toks)
         on (find-word toks 0 n "on")
         open (when on (find-punct toks (inc on) n "("))
-        close (when open (match-paren toks open))
+        close (when open (lex/match-paren toks open))
         segment (fn [[^long a ^long b]]
                   ;; strip trailing ASC|DESC, then COLLATE <name>
-                  (let [b (if (or (word-at? toks (dec b) "asc")
-                                (word-at? toks (dec b) "desc"))
+                  (let [b (if (or (lex/word-at? toks (dec b) "asc")
+                                (lex/word-at? toks (dec b) "desc"))
                             (dec b) b)
-                        b (if (and (> (- b 2) a) (word-at? toks (- b 2) "collate"))
+                        b (if (and (> (- b 2) a) (lex/word-at? toks (- b 2) "collate"))
                             (- b 2) b)]
                     (cond
                       ;; single bare/quoted identifier: a plain named column
                       (and (= 1 (- b a)) (#{:word :qid} (:t (get toks a))))
                       nil
                       ;; fully parenthesized: strip one level
-                      (and (punct-at? toks a "(") (= (match-paren toks a) (dec b)))
+                      (and (lex/punct-at? toks a "(") (= (lex/match-paren toks a) (dec b)))
                       (inner-text sql toks a (dec b))
                       :else
                       (str/trim (span-text sql toks a (dec b))))))

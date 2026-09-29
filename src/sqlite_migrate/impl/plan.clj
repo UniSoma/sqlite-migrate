@@ -44,7 +44,7 @@
   version means \"latest\": every version gate passes."
   (:require [clojure.string :as str]
     [sqlite-migrate.impl.diff :as d]
-    [sqlite-migrate.impl.extract :as x]
+    [sqlite-migrate.impl.lexical :as lex]
     [sqlite-migrate.impl.util :as u]))
 
 (set! *warn-on-reflection* true)
@@ -129,26 +129,17 @@
               (str "a generated column on " (:name declared)) v-generated capabilities)))))
 
 ;; ---------------------------------------------------------------------------
-;; Lexical reference checks (Token comparison machinery — never a parser)
-
-(defn- references?
-  "True when opaque-expression `text` lexically references the folded
-  column name `col-fold` (a word or quoted-identifier token folding to
-  it). Conservative and lexical only."
-  [text col-fold]
-  (boolean (and text
-             (some #(and (#{:word :qid} (:t %)) (= col-fold (:fold %)))
-               (x/tokenize text)))))
+;; Index references (the identifier-mention check is lexical's)
 
 (defn- index-references?
   "True when index value `idx` touches the folded column name: as a
   named key column, inside a key expression, or inside the partial
   WHERE clause."
   [idx col-fold]
-  (boolean (or (some #(or (= col-fold (some-> (:name %) x/fold-name))
-                        (references? (:expr %) col-fold))
+  (boolean (or (some #(or (= col-fold (some-> (:name %) u/fold-name))
+                        (lex/mentions? (:expr %) col-fold))
                  (:columns idx))
-             (references? (:where idx) col-fold))))
+             (lex/mentions? (:where idx) col-fold))))
 
 ;; ---------------------------------------------------------------------------
 ;; Per-entry routing inside a changed table
@@ -199,27 +190,8 @@
   "True when every added column sits in a trailing block of the declared
   column order — the only position ALTER TABLE ADD COLUMN can produce."
   [declared-table added-folds]
-  (let [decl-order (mapv (comp x/fold-name :name) (:columns declared-table))]
+  (let [decl-order (mapv (comp u/fold-name :name) (:columns declared-table))]
     (every? added-folds (take-last (count added-folds) decl-order))))
-
-(defn- default-kind
-  "The classification of a column DEFAULT's verbatim spelling that
-  compiles Gates (ADR 0015) and routes added columns (ADR 0022):
-  :null when the column defaults to NULL (no default, or the
-  NULL keyword); :constant for a literal whose value every copied row
-  will share (number, string, blob, TRUE/FALSE); :opaque for any other
-  expression — the planner never understands those (ADR 0015).
-  Parentheses wrapping the whole spelling are Noise (ADR 0021)."
-  [spelling]
-  (let [s (some-> spelling x/unparenthesize)]
-    (cond
-      (or (nil? s) (re-matches #"(?i)NULL" s)) :null
-      (or (re-matches #"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?" s)
-        (re-matches #"(?i)[+-]?0x[0-9A-F]+" s)
-        (re-matches #"'(?:[^']|'')*'" s)
-        (re-matches #"(?i)X'(?:[0-9A-F]{2})*'" s)
-        (re-matches #"(?i)TRUE|FALSE" s)) :constant
-      :else :opaque)))
 
 (defn- route-added-column
   "The route of an added column: `{:ops [...]}` with one `:add-column`
@@ -227,7 +199,7 @@
   cannot see row counts (ADR 0022); otherwise `{:rebuild []}`."
   [capabilities tname entry appendable?]
   (let [col (:declared entry)
-        dkind (default-kind (:default col))
+        dkind (lex/default-kind (:default col))
         blocked? (or (pos? (:pk col))
                    (not appendable?)
                    (= :opaque dkind)
@@ -237,7 +209,7 @@
                      (not (supports? capabilities v-add-column-empty-check))))]
     (if blocked?
       {:rebuild []}
-      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-add-column "" unpatched-position]
+      {:ops [(ordered-op [phase-change-tables (u/fold-name tname) sub-add-column "" unpatched-position]
                :add-column (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/quote-identifier tname) " ADD COLUMN " (column-def-sql col))])]})))
 
@@ -256,26 +228,26 @@
   ;; the lexical checks key on the LIVE table name — under a fused
   ;; table rename (ADR 0009) the ops target the declared name while
   ;; every surviving stored sql still spells the live one
-  (let [tfold (x/fold-name (:name live-table))]
+  (let [tfold (u/fold-name (:name live-table))]
     (and
-      (not (some #(= col-fold (x/fold-name %)) (get-in live-table [:primary-key :columns])))
-      (zero? (:pk (some #(when (= col-fold (x/fold-name (:name %))) %) (:columns live-table))))
-      (not (some (fn [u] (some #(= col-fold (x/fold-name %)) (:columns u)))
+      (not (some #(= col-fold (u/fold-name %)) (get-in live-table [:primary-key :columns])))
+      (zero? (:pk (some #(when (= col-fold (u/fold-name (:name %))) %) (:columns live-table))))
+      (not (some (fn [u] (some #(= col-fold (u/fold-name %)) (:columns u)))
              (:uniques live-table)))
       ;; SQLite rejects DROP COLUMN when the column sits in a FOREIGN KEY
       ;; clause; the Snapshot cannot tell a column-level REFERENCES (whose
       ;; drop SQLite allows) from a table-level clause, so block both
-      (not (some (fn [fk] (some #(= col-fold (x/fold-name %)) (:columns fk)))
+      (not (some (fn [fk] (some #(= col-fold (u/fold-name %)) (:columns fk)))
              (:foreign-keys live-table)))
       (not (some #(index-references? % col-fold) retained-indexes))
-      (not (some #(references? (:expr %) col-fold) retained-checks))
+      (not (some #(lex/mentions? (:expr %) col-fold) retained-checks))
       (not (some (fn [c]
                    (and (:generated c)
-                     (not (contains? dropped-col-folds (x/fold-name (:name c))))
-                     (not= col-fold (x/fold-name (:name c)))
-                     (references? (get-in c [:generated :expr]) col-fold)))
+                     (not (contains? dropped-col-folds (u/fold-name (:name c))))
+                     (not= col-fold (u/fold-name (:name c)))
+                     (lex/mentions? (get-in c [:generated :expr]) col-fold)))
              (:columns live-table)))
-      (not (some #(and (references? % col-fold) (references? % tfold))
+      (not (some #(and (lex/mentions? % col-fold) (lex/mentions? % tfold))
              surviving-sqls)))))
 
 (defn- order-dropped-columns
@@ -284,13 +256,13 @@
   order breaks ties; a cycle (impossible in a valid schema) falls back
   to folded-name order."
   [cols]
-  (loop [remaining (vec (sort-by (comp x/fold-name :name) cols)) out []]
+  (loop [remaining (vec (sort-by (comp u/fold-name :name) cols)) out []]
     (if (empty? remaining)
       out
       (let [referenced? (fn [c]
                           (some #(and (not= % c)
-                                   (references? (get-in % [:generated :expr])
-                                     (x/fold-name (:name c))))
+                                   (lex/mentions? (get-in % [:generated :expr])
+                                     (u/fold-name (:name c))))
                             remaining))
             pick (or (first (remove referenced? remaining)) (first remaining))]
         (recur (vec (remove #(identical? % pick) remaining)) (conj out pick))))))
@@ -298,8 +270,8 @@
 (defn- route-changed-column [capabilities tname entry]
   (if (= #{:not-null?} (:facts entry))
     (if (supports? capabilities v-alter-constraint)
-      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-alter-column
-                          (x/fold-name (entry-name entry))]
+      {:ops [(ordered-op [phase-change-tables (u/fold-name tname) sub-alter-column
+                          (u/fold-name (entry-name entry))]
                (if (:not-null? (:declared entry)) :set-not-null :drop-not-null)
                (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/quote-identifier tname) " ALTER COLUMN "
@@ -313,12 +285,12 @@
   anonymous ones (1), by folded name and diff position respectively."
   [c path]
   (if (:name c)
-    [0 (x/fold-name (:name c)) -1]
+    [0 (u/fold-name (:name c)) -1]
     [1 "" (peek path)]))
 
 (defn- add-check-op [tname entry]
   (let [c (:declared entry)]
-    (ordered-op (into [phase-change-tables (x/fold-name tname) sub-add-check]
+    (ordered-op (into [phase-change-tables (u/fold-name tname) sub-add-check]
                   (check-sort-key c (:path entry)))
       :add-check (:path entry) #{(:path entry)}
       [(str "ALTER TABLE " (u/quote-identifier tname)
@@ -327,7 +299,7 @@
 
 (defn- drop-check-op [tname entry]
   (let [c (:live entry)]
-    (ordered-op (into [phase-change-tables (x/fold-name tname) sub-drop-check]
+    (ordered-op (into [phase-change-tables (u/fold-name tname) sub-drop-check]
                   (check-sort-key c (:path entry)))
       :drop-check (:path entry) #{(:path entry)}
       [(str "ALTER TABLE " (u/quote-identifier tname) " DROP CONSTRAINT " (u/quote-identifier (:name c)))])))
@@ -352,14 +324,14 @@
                :drop-index (str "DROP INDEX " (u/quote-identifier nm))
                :drop-trigger (str "DROP TRIGGER " (u/quote-identifier nm))
                :drop-view (str "DROP VIEW " (u/quote-identifier nm)))]
-    (ordered-op [phase-drop-secondary sub parent-fold (x/fold-name nm)]
+    (ordered-op [phase-drop-secondary sub parent-fold (u/fold-name nm)]
       kind (:path entry) #{(:path entry)} [stmt])))
 
 (defn- create-secondary-op [sub kind path serves parent-fold nm sql]
-  (ordered-op [phase-create-secondary sub parent-fold (x/fold-name nm)] kind path serves [sql]))
+  (ordered-op [phase-create-secondary sub parent-fold (u/fold-name nm)] kind path serves [sql]))
 
 (defn- route-index [entry tname]
-  (let [tfold (x/fold-name tname)]
+  (let [tfold (u/fold-name tname)]
     (case (:kind entry)
       :added {:ops [(create-secondary-op 0 :create-index (:path entry) #{(:path entry)}
                       tfold (entry-name entry) (:sql (:declared entry)))]}
@@ -369,7 +341,7 @@
                         tfold (entry-name entry) (:sql (:declared entry)))]})))
 
 (defn- route-trigger [entry parent-name]
-  (let [pfold (x/fold-name parent-name)]
+  (let [pfold (u/fold-name parent-name)]
     (case (:kind entry)
       :added {:ops [(create-secondary-op 2 :create-trigger (:path entry) #{(:path entry)}
                       pfold (entry-name entry) (:sql (:declared entry)))]}
@@ -399,11 +371,11 @@
   under — the declared name plus a fixed suffix, lengthened until it
   collides with nothing in either Snapshot."
   [{:keys [live-snapshot declared-snapshot]} nm]
-  (let [taken (into #{} (map x/fold-name)
+  (let [taken (into #{} (map u/fold-name)
                 (concat (keys (:tables live-snapshot)) (keys (:views live-snapshot))
                   (keys (:tables declared-snapshot)) (keys (:views declared-snapshot))))]
     (loop [candidate (str nm "__sqm_rebuild")]
-      (if (contains? taken (x/fold-name candidate))
+      (if (contains? taken (u/fold-name candidate))
         (recur (str candidate "_"))
         candidate))))
 
@@ -414,7 +386,7 @@
   skipped. Only a bare word can be one of those keywords — a quoted
   identifier spelling `if` is a table named `if`."
   [^String sql temp-name]
-  (let [toks (x/tokenize sql)
+  (let [toks (lex/tokenize sql)
         after-table (inc (long (first (keep-indexed
                                         (fn [i t]
                                           (when (and (= :word (:t t)) (= "table" (:fold t))) i))
@@ -433,8 +405,8 @@
   (when-not (:without-rowid? table)
     (let [pks (filterv #(pos? (:pk %)) (:columns table))]
       (when (and (= 1 (count pks))
-              (= "integer" (some-> (:type (first pks)) x/fold-name)))
-        (x/fold-name (:name (first pks)))))))
+              (= "integer" (some-> (:type (first pks)) u/fold-name)))
+        (u/fold-name (:name (first pks)))))))
 
 (defn- rebuild-copy-sql
   "The rebuild's INSERT...SELECT — column mapping strictly by name (ADR
@@ -446,9 +418,9 @@
   both sides are rowid tables and no copied INTEGER PRIMARY KEY column
   already aliases it (ADR 0010). Nil when nothing is copyable."
   [temp-name {:keys [live-table declared-table] renames :rename-map}]
-  (let [live-name-by-fold (into {} (map (fn [c] [(x/fold-name (:name c)) (:name c)]))
+  (let [live-name-by-fold (into {} (map (fn [c] [(u/fold-name (:name c)) (:name c)]))
                             (:columns live-table))
-        live-of (fn [c] (let [f (x/fold-name (:name c))]
+        live-of (fn [c] (let [f (u/fold-name (:name c))]
                           (or (get renames f) (get live-name-by-fold f))))
         shared (filterv #(and (nil? (:generated %)) (live-of %))
                  (:columns declared-table))
@@ -456,7 +428,7 @@
         rowid? (and (not (:without-rowid? live-table))
                  (not (:without-rowid? declared-table))
                  (not (and alias-fold
-                        (some #(= alias-fold (x/fold-name (:name %))) shared))))
+                        (some #(= alias-fold (u/fold-name (:name %))) shared))))
         insert-cols (concat (when rowid? ["rowid"]) (map (comp u/quote-identifier :name) shared))
         select-cols (concat (when rowid? ["rowid"]) (map (comp u/quote-identifier live-of) shared))]
     (when (seq insert-cols)
@@ -490,16 +462,16 @@
   their surviving triggers, plus standalone referencing triggers of
   other parents."
   [{:keys [views table-triggers]} tfold]
-  (let [dep-views (filterv #(references? (:sql %) tfold) views)
-        dep-view-folds (into #{} (map (comp x/fold-name :name)) dep-views)
+  (let [dep-views (filterv #(lex/mentions? (:sql %) tfold) views)
+        dep-view-folds (into #{} (map (comp u/fold-name :name)) dep-views)
         loose-view-triggers (for [v views
-                                  :when (not (contains? dep-view-folds (x/fold-name (:name v))))
+                                  :when (not (contains? dep-view-folds (u/fold-name (:name v))))
                                   trg (:triggers v)
-                                  :when (references? (:sql trg) tfold)]
+                                  :when (lex/mentions? (:sql trg) tfold)]
                               trg)
         loose-table-triggers (for [trg table-triggers
-                                   :when (and (not= tfold (x/fold-name (:table trg)))
-                                           (references? (:sql trg) tfold))]
+                                   :when (and (not= tfold (u/fold-name (:table trg)))
+                                           (lex/mentions? (:sql trg) tfold))]
                                trg)]
     {:views dep-views
      :triggers (vec (concat loose-view-triggers loose-table-triggers))}))
@@ -551,7 +523,7 @@
   rename-first — then recreate the declared indexes and triggers and
   the dropped dependents."
   [planning-context tname serves {:keys [declared-table] :as pairing}]
-  (let [tfold (x/fold-name tname)
+  (let [tfold (u/fold-name tname)
         temp (temp-rebuild-name planning-context (:name declared-table))
         deps (rebuild-dependents (:surviving-dependents planning-context) tfold)
         sql (-> (rebuild-stage-sqls temp pairing)
@@ -598,16 +570,16 @@
   the rename directive's live source when one binds it, else the
   folded-name match. Nil when the column is new."
   [{:keys [live-table rename-map]} declared-name]
-  (let [f (x/fold-name declared-name)]
+  (let [f (u/fold-name declared-name)]
     (or (get rename-map f)
-      (some #(when (= f (x/fold-name (:name %))) (:name %))
+      (some #(when (= f (u/fold-name (:name %))) (:name %))
         (:columns live-table)))))
 
 (defn- declared-column
   "The declared table's column named `n`, by folded-name identity."
   [{:keys [declared-table]} n]
-  (let [f (x/fold-name n)]
-    (some #(when (= f (x/fold-name (:name %))) %)
+  (let [f (u/fold-name n)]
+    (some #(when (= f (u/fold-name (:name %))) %)
       (:columns declared-table))))
 
 (defn- key-part
@@ -622,9 +594,9 @@
   [pairing declared-name]
   (if-let [lc (live-col-name pairing declared-name)]
     [:live lc]
-    (let [d (some-> (:default (declared-column pairing declared-name)) x/unparenthesize)]
-      (case (default-kind d)
-        :constant [:const (str "(" d ")")]
+    (let [d (:default (declared-column pairing declared-name))]
+      (case (lex/default-kind d)
+        :constant [:const (str "(" (lex/default-constant d) ")")]
         :null :null
         :opaque nil))))
 
@@ -710,7 +682,7 @@
       ;; the addition exactly like the bare NOT NULL once rows exist;
       ;; an opaque default is assumed to fill the column (ADR 0015)
       (let [c (:declared entry)]
-        (when (and (:not-null? c) (= :null (default-kind (:default c))) (nil? (:generated c)))
+        (when (and (:not-null? c) (= :null (lex/default-kind (:default c))) (nil? (:generated c)))
           [(gate :empty-table (:path entry)
              (str "column " (:name c) " is added NOT NULL with no default;"
                " table " t " must be empty")
@@ -766,9 +738,9 @@
     (let [t (:name (:live-table pairing))
           fk (:declared entry)
           key-parts (mapv #(key-part pairing %) (:columns fk))
-          parent-fold (x/fold-name (:ref-table fk))
+          parent-fold (u/fold-name (:ref-table fk))
           find-parent (fn [snap]
-                        (some (fn [[k v]] (when (= parent-fold (x/fold-name k)) v))
+                        (some (fn [[k v]] (when (= parent-fold (u/fold-name k)) v))
                           (:tables snap)))
           parent-live (find-parent live-snapshot)
           ref-cols (if (and (seq (:ref-columns fk)) (every? some? (:ref-columns fk)))
@@ -931,7 +903,7 @@
                                 (when (nil? (:generated dc))
                                   (when-let [lc (live-col-name pairing (:name dc))]
                                     (strict-violation-condition (u/quote-identifier lc)
-                                      (some-> (:type dc) x/fold-name)))))
+                                      (some-> (:type dc) u/fold-name)))))
                           (:columns declared-table))]
               (when (seq conds)
                 [(gate :strict (:path entry)
@@ -945,7 +917,7 @@
                                     ;; a new PK column defaulting to NULL leaves
                                     ;; every copied row NULL there; a constant
                                     ;; or opaque default fills it (ADR 0015)
-                                    (if (= :null (default-kind
+                                    (if (= :null (lex/default-kind
                                                    (:default (declared-column pairing n))))
                                       (reduced :all)
                                       acc)))
@@ -1019,7 +991,7 @@
   but a `schema_version` is a mutation counter rather than a proof of
   identity (ADR 0017), so this stays a live guard."
   [snapshot side tname]
-  (or (some (fn [[k v]] (when (= (x/fold-name k) (x/fold-name tname)) v))
+  (or (some (fn [[k v]] (when (= (u/fold-name k) (u/fold-name tname)) v))
         (:tables snapshot))
     (throw (ex-info (str "the " (name side) " Snapshot has no table " tname
                       ", which this Diff says changed")
@@ -1057,7 +1029,7 @@
           (:rename-collision? routing-state)
           (not (supports? capabilities v-rename-column)))
       {:rebuild []}
-      {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-alter-column (x/fold-name from)]
+      {:ops [(ordered-op [phase-change-tables (u/fold-name tname) sub-alter-column (u/fold-name from)]
                :rename-column (:path entry) #{(:path entry)}
                [(str "ALTER TABLE " (u/quote-identifier tname) " RENAME COLUMN "
                   (u/quote-identifier from) " TO " (u/quote-identifier to))])]})))
@@ -1082,7 +1054,7 @@
                    (route-added-column capabilities tname entry (:appendable? routing-state))))
         :removed
         (let [col (:live entry)
-              col-fold (x/fold-name (:name col))
+              col-fold (u/fold-name (:name col))
               in-place? (and (supports? capabilities v-drop-column)
                           (droppable-in-place? tname (:live-table pairing) col-fold routing-state))
               ;; an authorized drop is intent supplied (ADR 0009):
@@ -1094,7 +1066,7 @@
             (not in-place?) {:rebuild (when destructive?
                                         [(destructive-refusal (entry-object entry))])}
             destructive? {:needs-intent [(destructive-refusal (entry-object entry))]}
-            :else {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-drop-column
+            :else {:ops [(ordered-op [phase-change-tables (u/fold-name tname) sub-drop-column
                                       (get (:drop-order routing-state) col-fold)]
                            :drop-column (:path entry) #{(:path entry)}
                            [(str "ALTER TABLE " (u/quote-identifier tname)
@@ -1117,7 +1089,7 @@
         dropped-index-folds (into #{}
                               (comp (filter #(and (= :index (seg-of %))
                                                (#{:removed :changed} (:kind %))))
-                                (map (comp x/fold-name entry-name)))
+                                (map (comp u/fold-name entry-name)))
                               entries)
         droppable-check? (fn [e] (and (supports? capabilities v-alter-constraint)
                                    (:name (:live e))))
@@ -1133,17 +1105,17 @@
                        entries)
         added-folds (into #{} (comp (filter #(and (= :column (seg-of %))
                                                (= :added (:kind %))))
-                                (map (comp x/fold-name entry-name)))
+                                (map (comp u/fold-name entry-name)))
                       entries)
-        drop-order (zipmap (map (comp x/fold-name :name)
+        drop-order (zipmap (map (comp u/fold-name :name)
                              (order-dropped-columns removed-cols))
                      (range))]
     {:appendable? (appended-suffix? declared-table added-folds)
      :retained-indexes (vec (for [[nm idx] (sort-by key (:indexes live-table))
-                                  :when (not (contains? dropped-index-folds (x/fold-name nm)))]
+                                  :when (not (contains? dropped-index-folds (u/fold-name nm)))]
                               idx))
      :retained-checks (vec (remove (set dropped-check-live) (:checks live-table)))
-     :dropped-col-folds (into #{} (map (comp x/fold-name :name)) removed-cols)
+     :dropped-col-folds (into #{} (map (comp u/fold-name :name)) removed-cols)
      :drop-order drop-order}))
 
 (defn- declared-position
@@ -1151,11 +1123,11 @@
   the declared column order, so appended columns emit in declared
   order."
   [declared-table routed-ops]
-  (let [pos (into {} (map-indexed (fn [i c] [(x/fold-name (:name c)) i]))
+  (let [pos (into {} (map-indexed (fn [i c] [(u/fold-name (:name c)) i]))
               (:columns declared-table))]
     (mapv (fn [{:keys [order] :as o}]
             (if (= :add-column (get-in o [:op :kind]))
-              (assoc o :order (conj (pop order) (pos (x/fold-name (peek (get-in o [:op :path]))))))
+              (assoc o :order (conj (pop order) (pos (u/fold-name (peek (get-in o [:op :path]))))))
               o))
       routed-ops)))
 
@@ -1173,19 +1145,19 @@
                         (comp (filter #(and (= :view (first (:path %)))
                                          (= 2 (count (:path %)))
                                          (dropped? %)))
-                          (map (comp x/fold-name second :path)))
+                          (map (comp u/fold-name second :path)))
                         entries)
         dropped-triggers (into #{}
                            (comp (filter #(and (= :trigger (nth (:path %) 2 nil))
                                             (dropped? %)))
-                             (map (comp x/fold-name peek :path)))
+                             (map (comp u/fold-name peek :path)))
                            entries)
         surviving-triggers (fn [obj]
                              (vec (for [[nm trg] (sort-by key (:triggers obj))
-                                        :when (not (contains? dropped-triggers (x/fold-name nm)))]
+                                        :when (not (contains? dropped-triggers (u/fold-name nm)))]
                                     {:name nm :sql (:sql (meta trg))})))]
     {:views (vec (for [[nm v] (sort-by key (:views live-snapshot))
-                       :when (not (contains? dropped-views (x/fold-name nm)))]
+                       :when (not (contains? dropped-views (u/fold-name nm)))]
                    {:name nm :sql (:sql (meta v)) :triggers (surviving-triggers v)}))
      :table-triggers (vec (for [[tn t] (sort-by key (:tables live-snapshot))
                                 trg (surviving-triggers t)]
@@ -1207,7 +1179,7 @@
   phase-3 op of the fused table, so later in-place ops target the
   declared name."
   [live-name declared-name serves]
-  (ordered-op [phase-change-tables (x/fold-name declared-name) sub-rename-table]
+  (ordered-op [phase-change-tables (u/fold-name declared-name) sub-rename-table]
     :rename-table [:table live-name] serves
     [(str "ALTER TABLE " (u/quote-identifier live-name) " RENAME TO " (u/quote-identifier declared-name))]))
 
@@ -1246,25 +1218,25 @@
   "The folded column name a column entry's path ends in, folded exactly
   as the Equivalence relation folds identifiers (ADR 0009)."
   [entry]
-  (x/fold-name (peek (:path entry))))
+  (u/fold-name (peek (:path entry))))
 
 (defn- columns-by-fold
   "`table`'s columns indexed by folded name."
   [table]
-  (into {} (map (fn [c] [(x/fold-name (:name c)) c])) (:columns table)))
+  (into {} (map (fn [c] [(u/fold-name (:name c)) c])) (:columns table)))
 
 (defn- column-folds
   "The folded names of `table`'s columns."
   [table]
-  (into #{} (map (comp x/fold-name :name)) (:columns table)))
+  (into #{} (map (comp u/fold-name :name)) (:columns table)))
 
 (defn- rename-candidates
   "One table's :rename-column claims normalized for resolution: each
   directive paired with its folded live `from` and declared `to`."
   [rename-claims]
   (mapv (fn [dv] {:directive dv
-                  :from-fold (x/fold-name (:from dv))
-                  :to-fold (x/fold-name (:to dv))})
+                  :from-fold (u/fold-name (:from dv))
+                  :to-fold (u/fold-name (:to dv))})
     rename-claims))
 
 (defn- entry-subject-folds
@@ -1536,7 +1508,7 @@
   Returns `{:ops [...] :unhandled {entry refusals} :used
   [directives]}`."
   [capabilities planning-context claims tname entries pairing fused]
-  (let [lt-fold (x/fold-name (:name (:live-table pairing)))
+  (let [lt-fold (u/fold-name (:name (:live-table pairing)))
         ;; fusion both consumes the pairing and hands it back with its
         ;; :rename-map resolved — nothing below wants the unresolved one
         {:keys [units rename-directives pairing collision?]}
@@ -1609,7 +1581,7 @@
   all serving the table entry."
   [entry]
   (let [t (:declared entry)
-        tfold (x/fold-name (:name t))
+        tfold (u/fold-name (:name t))
         serves #{(:path entry)}]
     (into [(ordered-op [phase-create-tables tfold] :create-table (:path entry) serves [(:sql t)])]
       (concat
@@ -1635,8 +1607,8 @@
           {:ops (create-table-ops whole) :unhandled {}}))
 
       (and whole (= :removed (:kind whole)))
-      (if-let [directive (get (:drop-tables claims) (x/fold-name tname))]
-        {:ops [(ordered-op [phase-drop-tables (x/fold-name tname)]
+      (if-let [directive (get (:drop-tables claims) (u/fold-name tname))]
+        {:ops [(ordered-op [phase-drop-tables (u/fold-name tname)]
                  :drop-table (:path whole) #{(:path whole)}
                  [(str "DROP TABLE " (u/quote-identifier tname))])]
          :unhandled {}
@@ -1659,7 +1631,7 @@
   triggers recreated with it) always plan, all serving the view entry."
   [_capabilities vname entries]
   (let [whole (first entries)
-        vfold (x/fold-name vname)
+        vfold (u/fold-name vname)
         serves #{(:path whole)}
         declared-trigger-ops (for [[nm trg] (sort-by key (:triggers (:declared whole)))]
                                (create-secondary-op 2 :create-trigger
@@ -1694,10 +1666,10 @@
   Equivalence relation folds them (ADR 0009)."
   [{:keys [directive] :as d}]
   (case directive
-    :rename-table [:table (x/fold-name (:from d))]
-    :drop-table [:table (x/fold-name (:table d))]
-    :rename-column [:table (x/fold-name (:table d)) :column (x/fold-name (:from d))]
-    :drop-column [:table (x/fold-name (:table d)) :column (x/fold-name (:column d))]))
+    :rename-table [:table (u/fold-name (:from d))]
+    :drop-table [:table (u/fold-name (:table d))]
+    :rename-column [:table (u/fold-name (:table d)) :column (u/fold-name (:from d))]
+    :drop-column [:table (u/fold-name (:table d)) :column (u/fold-name (:column d))]))
 
 (defn- directive-declared-target
   "The declared target a rename claims — the :to side, folded; keyed by
@@ -1705,8 +1677,8 @@
   live table name. Nil for drops (they claim no declared object)."
   [{:keys [directive] :as d}]
   (case directive
-    :rename-table [:table (x/fold-name (:to d))]
-    :rename-column [:table (x/fold-name (:table d)) :column (x/fold-name (:to d))]
+    :rename-table [:table (u/fold-name (:to d))]
+    :rename-column [:table (u/fold-name (:table d)) :column (u/fold-name (:to d))]
     nil))
 
 (defn- check-directive-shape! [d]
@@ -1740,11 +1712,11 @@
                       " is claimed twice")
         {:path path :directives (vec directives)})))
   (let [dropped-tables (into #{} (comp (filter #(= :drop-table (:directive %)))
-                                   (map (comp x/fold-name :table)))
+                                   (map (comp u/fold-name :table)))
                          directives)]
     (doseq [d directives]
       (when (and (= :rename-column (:directive d))
-              (contains? dropped-tables (x/fold-name (:table d))))
+              (contains? dropped-tables (u/fold-name (:table d))))
         (u/malformed! (str "conflicting directives: table " (:table d)
                         " is dropped, but a column rename inside it claims"
                         " its data survives")
@@ -1812,17 +1784,17 @@
   directive order, so planning consumes them as the caller wrote them."
   [directives]
   {:drop-tables (into {} (comp (filter #(= :drop-table (:directive %)))
-                           (map (fn [dv] [(x/fold-name (:table dv)) dv])))
+                           (map (fn [dv] [(u/fold-name (:table dv)) dv])))
                   directives)
    :column-renames (reduce (fn [m dv]
                              (if (= :rename-column (:directive dv))
-                               (update m (x/fold-name (:table dv)) (fnil conj []) dv)
+                               (update m (u/fold-name (:table dv)) (fnil conj []) dv)
                                m))
                      {} directives)
    :drop-columns (reduce (fn [m dv]
                            (if (= :drop-column (:directive dv))
-                             (assoc-in m [(x/fold-name (:table dv))
-                                          (x/fold-name (:column dv))]
+                             (assoc-in m [(u/fold-name (:table dv))
+                                          (u/fold-name (:column dv))]
                                dv)
                              m))
                    {} directives)})
@@ -1831,7 +1803,7 @@
   "The group `entry` belongs to: its object kind paired with its folded
   object name. Entries of one object plan together (ADR 0006)."
   [entry]
-  [(first (:path entry)) (x/fold-name (second (:path entry)))])
+  [(first (:path entry)) (u/fold-name (second (:path entry)))])
 
 (defn- whole-table-entry
   "The lone whole-object entry of the group keyed `k` in `groups-by-key`
@@ -1851,8 +1823,8 @@
   (let [by-key (into {} (map (juxt (comp entry-group-key first) identity)) groups)]
     (vec (for [dv directives
                :when (= :rename-table (:directive dv))
-               :let [removed (whole-table-entry by-key [:table (x/fold-name (:from dv))] :removed)
-                     added (whole-table-entry by-key [:table (x/fold-name (:to dv))] :added)]
+               :let [removed (whole-table-entry by-key [:table (u/fold-name (:from dv))] :removed)
+                     added (whole-table-entry by-key [:table (u/fold-name (:to dv))] :added)]
                :when (and removed added
                        ;; a virtual pair never fuses: no general
                        ;; alter or rebuild exists (ADR 0007)

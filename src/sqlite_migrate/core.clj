@@ -37,7 +37,7 @@
   (->> (q conn "SELECT name, type, \"notnull\", pk, hidden FROM pragma_table_xinfo(?) WHERE hidden <> 1 ORDER BY cid"
          table-name)
     (mapv (fn [{:keys [name type notnull pk hidden]}]
-            (let [k (x/fold-name name)]
+            (let [k (u/fold-name name)]
               (cond-> {:name name :type type :not-null? (= 1 notnull) :pk pk}
                 (contains? (:defaults facts) k)
                 (assoc :default (get (:defaults facts) k))
@@ -70,7 +70,7 @@
         clauses (vec (:fks facts))
         fk-key (fn [{:keys [ref-table columns]}]
                  (when (and ref-table (seq columns))
-                   [(x/fold-name ref-table) (mapv x/fold-name columns)]))
+                   [(u/fold-name ref-table) (mapv u/fold-name columns)]))
         ckeys (mapv fk-key clauses)
         gkeys (mapv fk-key groups)
         matchable? (and (seq clauses)

@@ -21,45 +21,20 @@
   to at most one whole-value entry — fine-grained entries exist only
   inside a changed table (ADR 0004)."
   (:require [clojure.set :as set]
-    [sqlite-migrate.impl.extract :as x]))
+    [sqlite-migrate.impl.lexical :as lex]
+    [sqlite-migrate.impl.util :as u]))
 
 ;; ---------------------------------------------------------------------------
-;; Token comparison
+;; Identifier fold and type text
 
 (defn- fold [s]
-  (some-> s x/fold-name))
-
-(defn- token-key
-  "The identity of one token under Token comparison: words and quoted
-  identifiers collapse to their folded spelling (quoting is Noise);
-  every other kind compares by verbatim text."
-  [{:keys [t text] :as tok}]
-  (case t
-    (:word :qid) [:id (:fold tok)]
-    [t text]))
-
-(defn- opaque=
-  "Token comparison over two opaque-expression texts; nil only equals
-  nil."
-  [a b]
-  (cond
-    (and (nil? a) (nil? b)) true
-    (or (nil? a) (nil? b)) false
-    :else (= (mapv token-key (x/tokenize a))
-            (mapv token-key (x/tokenize b)))))
+  (some-> s u/fold-name))
 
 (defn- type=
   "Declared type text compares case-insensitively with whitespace
   normalized — as a token sequence, never by affinity (ADR 0003)."
   [a b]
-  (opaque= (or a "") (or b "")))
-
-(defn- default=
-  "Token comparison over two DEFAULT spellings once the parentheses
-  wrapping the whole value drop out — `(0.01)` equals `0.01` (ADR
-  0021)."
-  [a b]
-  (opaque= (some-> a x/unparenthesize) (some-> b x/unparenthesize)))
+  (lex/opaque= (or a "") (or b "")))
 
 ;; ---------------------------------------------------------------------------
 ;; Entry construction
@@ -121,13 +96,13 @@
     (and (nil? a) (nil? b)) true
     (or (nil? a) (nil? b)) false
     :else (and (= (:storage a) (:storage b))
-            (opaque= (:expr a) (:expr b)))))
+            (lex/opaque= (:expr a) (:expr b)))))
 
 (defn- column-facts [l d]
   (cond-> #{}
     (not (type= (:type l) (:type d))) (conj :type)
     (not= (:not-null? l) (:not-null? d)) (conj :not-null?)
-    (not (default= (:default l) (:default d))) (conj :default)
+    (not (lex/default= (:default l) (:default d))) (conj :default)
     (not= (fold (:collate l)) (fold (:collate d))) (conj :collate)
     (not (generated= (:generated l) (:generated d))) (conj :generated)))
 
@@ -161,7 +136,7 @@
 
 (defn- check-facts [l d]
   (cond-> #{}
-    (not (opaque= (:expr l) (:expr d))) (conj :expr)))
+    (not (lex/opaque= (:expr l) (:expr d))) (conj :expr)))
 
 (defn- unique-facts [l d]
   (cond-> #{}
@@ -175,11 +150,11 @@
     (not= (:on-update l) (:on-update d)) (conj :on-update)
     (not= (:on-delete l) (:on-delete d)) (conj :on-delete)
     (not= (:match l) (:match d)) (conj :match)
-    (not (opaque= (:deferrable l) (:deferrable d))) (conj :deferrable)))
+    (not (lex/opaque= (:deferrable l) (:deferrable d))) (conj :deferrable)))
 
 (defn- index-column= [a b]
   (and (= (fold (:name a)) (fold (:name b)))
-    (opaque= (:expr a) (:expr b))
+    (lex/opaque= (:expr a) (:expr b))
     (= (fold (:collate a)) (fold (:collate b)))
     (= (:desc? a) (:desc? b))))
 
@@ -189,14 +164,14 @@
     (not= (:partial? l) (:partial? d)) (conj :partial?)
     (not (and (= (count (:columns l)) (count (:columns d)))
            (every? true? (map index-column= (:columns l) (:columns d))))) (conj :columns)
-    (not (opaque= (:where l) (:where d))) (conj :where)))
+    (not (lex/opaque= (:where l) (:where d))) (conj :where)))
 
 (defn- sql-facts
   "Objects the Snapshot carries opaquely (triggers, views, virtual
   tables) compare by Token comparison over their stored CREATE sql."
   [l d]
   (cond-> #{}
-    (not (opaque= (:sql (meta l)) (:sql (meta d)))) (conj :sql)))
+    (not (lex/opaque= (:sql (meta l)) (:sql (meta d)))) (conj :sql)))
 
 ;; ---------------------------------------------------------------------------
 ;; Fine-grained entries inside a changed table
@@ -284,7 +259,7 @@
   (let [l (fold-keyed lm)
         d (fold-keyed dm)]
     (and (= (set (keys l)) (set (keys d)))
-      (every? (fn [[k lt]] (opaque= (:sql (meta lt)) (:sql (meta (d k))))) l))))
+      (every? (fn [[k lt]] (lex/opaque= (:sql (meta lt)) (:sql (meta (d k))))) l))))
 
 (defn- view-entries
   "The zero-or-one entries for a view present on both sides: one
