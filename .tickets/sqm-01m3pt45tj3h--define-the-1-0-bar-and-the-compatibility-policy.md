@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:58.130743815Z'
-updated: '2026-09-29T14:46:58.217315612Z'
+updated: '2026-09-29T18:00:50.804472273Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
@@ -22,3 +22,9 @@ Settled while charting (map Notes), to be made precise and written down:
 - Breaking changes are allowed in majors, replacing "a breaking change would be a new artifact name" — with open sets add-only in every version, a deprecating minor before any break, and Plan changes classified (different Plan = minor; data-losing or failing Plan = bug fix).
 
 Open: what counts as "breaking" for this library (a Snapshot/Diff/Plan key rename? a report wording change? a refused-where-it-planned change?), how deprecation is signalled in a data-first API, and whether 0.x releases before 1.0 get any promise.
+
+## Notes
+
+**2026-09-29T18:00:50.804472273Z**
+
+From "Decide how a Plan leaves consumer-owned live objects alone": ADR 0024 asserts that after 1.0, the same input yielding different Diff entries is a breaking change. That's why view trigger entries land before 1.0. The settled policy covers Plans and open sets, not Diff entry shape. Confirm here that a Diff-shape change is a major, or soften ADR 0024.

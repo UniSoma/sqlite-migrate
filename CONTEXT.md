@@ -103,7 +103,8 @@ The ordered, executable data value produced by planning a Diff against the two
 Snapshots it was computed from, under given capabilities and directives: a thin
 wrapper holding an ordered sequence of Ops,
 both sides' Snapshot provenance, the capabilities and directives planned under
-(with unused directives called out), and the unhandled Diff entries.
+(with unused directives called out), the Kept entries, and the unhandled Diff
+entries.
 List position is execution order. Pure EDN; nothing connection-bound.
 _Avoid_: migration, changeset, script
 
@@ -178,11 +179,11 @@ _Avoid_: check report, gate report (a Check report is a rendering of a Check res
 
 **Directive**:
 One datum of explicit migration intent supplied to the planner alongside the Diff
-and Capabilities: a plain-EDN map naming an intended action (rename or drop) on one
-named object. Conditional — it acts only where live and declared state match its
-terms; unmatched directives are inert and reported in the Plan as unused. Lifts
-`:needs-intent` Refusals only. Kind keywords are an open set — added, never removed
-or renamed.
+and Capabilities: a plain-EDN map naming an intended action (rename, drop, or
+keep) on one named object. Conditional — it acts only where live and declared state
+match its terms; unmatched directives are inert and reported in the Plan as unused.
+Lifts `:needs-intent` Refusals, or keeps a live-only object in place; nothing else.
+Kind keywords are an open set — added, never removed or renamed.
 _Avoid_: hint, annotation, migration option, override
 
 **Directive set**:
@@ -190,14 +191,23 @@ The Directives being assembled against one Diff before planning: a value binding
 that Diff to an ordered collection of Directives, grown step by step. Literal steps
 append the Directives they are given verbatim; derived steps read the Diff and emit
 one explicit per-object Directive for each candidate not already claimed earlier in
-the set. Steps are order-sensitive — a drop derived before a rename is a conflict,
-not a subtraction. Its output is plain Directives; the planner never sees the set.
+the set. Steps are order-sensitive — a drop derived before a rename or a keep is a
+conflict, not a subtraction. Its output is plain Directives; the planner never sees
+the set.
 _Avoid_: builder, context, ctx, directive pipeline, bulk directive
+
+**Kept entry**:
+A `removed` Diff entry a keep Directive matched: a live-only table, view, index, or
+trigger the Plan leaves in place instead of dropping. Neither served by an Op nor
+unhandled — the Plan's third bucket. The Diff still reports it, so a file with Kept
+entries is never Equivalent to its Declaration; they survive a Rebuild and leave
+with a table they depend on when that table is dropped.
+_Avoid_: unmanaged object, ignored object, excluded object, consumer-owned object
 
 **Claim**:
 A Directive resolved against the live side it names. The planner indexes the supplied
-Directives by folded live table name — table drops, column renames, column drops — and
-reads one table's claims as it plans that table. One table's rename claims resolve as a
+Directives by folded live table or view name — table drops, column renames, column
+drops, keeps — and reads one object's claims as it plans that object. One table's rename claims resolve as a
 set, the greatest that satisfies simultaneously, so swaps and chains resolve together
 while a half-match drops out inert. The verb sense is literal: a rename claims the Diff
 entries on its live `from` side and its declared `to` side, and those entries fuse into

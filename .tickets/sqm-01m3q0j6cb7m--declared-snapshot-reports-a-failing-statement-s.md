@@ -6,7 +6,7 @@ type: bug
 priority: 2
 mode: afk
 created: '2026-09-29T16:39:28.907500697Z'
-updated: '2026-09-29T16:39:28.997980547Z'
+updated: '2026-09-29T19:22:19.575855992Z'
 acceptance:
 - title: 'A regression deftest: the example above throws :sqlite-error with :statement-index 2 and :statement "CREATE TABLE a (z)", failing before the fix'
   done: false
@@ -17,6 +17,8 @@ acceptance:
 links:
 - sqm-01m3pt45mm8c
 - sqm-01m3q0hqvwa6
+- sqm-01m3q0j698q9
+deps:
 - sqm-01m3q0j698q9
 ---
 

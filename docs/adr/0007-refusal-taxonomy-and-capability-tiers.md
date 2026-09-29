@@ -1,5 +1,8 @@
 # Refusals are two-class data; capability is version plus one rebuild switch
 
+> Amended by ADR 0023: keep Directives also leave live-only objects in place; the
+> data-loss boundary for Refusals stands.
+
 An unhandled Diff entry in a Plan carries a **vector of Refusals** — every
 refusal that applies, never just the first. Each Refusal is a plain-EDN map:
 the refusal class, a code keyword, and a human-readable explanation. Classes

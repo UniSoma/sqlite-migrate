@@ -1,5 +1,7 @@
 # The Directive set: an eager, order-sensitive, Diff-bound builder of explicit Directives
 
+> Amended by ADR 0023: keep steps (`keep-tables`, `keep-views`, `keep-indexes`, `keep-triggers`) claim objects as renames do.
+
 Amends ADR 0009 (derived drops are compatible with the no-bulk-approval
 rule) and ADR 0013 (a fifth public namespace).
 

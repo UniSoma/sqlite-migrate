@@ -5,6 +5,10 @@
 > below — the planner still receives one reviewable Directive per object and
 > never a wildcard; only the typing is saved.
 
+> Amended by ADR 0023: keep Directives leave live-only objects in place, so a
+> Directive no longer only lifts `:needs-intent` Refusals, and the inventory
+> grows past the resolutions of `:destructive-drop`.
+
 A **Directive** is the intent channel: the datum by which an author supplies
 what a pure state diff cannot infer. Directives are a **planner input** —
 `plan` takes the Diff, the Capabilities, and a seq of directives — and the

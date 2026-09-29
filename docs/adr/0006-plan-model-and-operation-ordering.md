@@ -2,6 +2,8 @@
 
 > Amended by ADR 0017: `plan` takes both Snapshots positionally, ahead of the Diff.
 
+> Amended by ADR 0023: completeness is served ∪ kept ∪ unhandled; the Plan gains a `:kept` slot.
+
 A Plan is a thin wrapper map produced by the pure function
 `plan(live, declared, diff, opts)` — whose information basis is the Diff's
 entries as work items plus the two Snapshots it was computed from, passed as

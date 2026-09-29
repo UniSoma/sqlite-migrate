@@ -1,5 +1,7 @@
 # Correctness properties and the generative testing strategy
 
+> Amended by ADR 0023: residual convergence leaves exactly the unhandled entries plus the Kept entries.
+
 The spec commits to six locked correctness properties, tested generatively with
 real SQLite in the loop. The first two — **no-op** and **round-trip** — are
 inherited verbatim from ADR 0003. The rest supersede ADR 0003's provisional

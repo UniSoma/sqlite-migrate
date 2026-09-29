@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:58.314457843Z'
-updated: '2026-09-29T16:40:20.445804998Z'
+updated: '2026-09-29T17:59:08.132806339Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
@@ -38,3 +38,7 @@ From the first-consumer assessment (Assess the first consumer against today's SN
 - A Declaration string: ADR 0002 already accepts multi-statement text, and the bug "declared-snapshot realizes every statement of a multi-statement Declaration string" restores that. What's left for the surface is whether the docstring and README say outright that a `.sql` script is a valid Declaration (finding 9 is the doc gap).
 - The consumer would feed its migration audit trail from the Apply report's `:ops` and each Op's `:sql`. That's evidence for pinning the Apply report shape.
 - Blocked by "Decide how a Plan leaves consumer-owned live objects alone", which may add a `plan` opt and change what a live-only trigger drop requires.
+
+**2026-09-29T17:59:08.132806339Z**
+
+From "Decide how a Plan leaves consumer-owned live objects alone" (ADRs 0023, 0024): the surface to freeze gains four Directive kinds (:keep-table, :keep-view, :keep-index, :keep-trigger with :table or :view), four Directive set steps (keep-tables, keep-views, keep-indexes, keep-triggers), the Plan's :kept slot, and Diff paths [:view v :trigger x] (the view :triggers fact is retired).

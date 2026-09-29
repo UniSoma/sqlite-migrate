@@ -1,5 +1,7 @@
 # The Diff is a flat, self-contained, intent-free EDN value
 
+> Amended by ADR 0024: a view present on both sides carries fine-grained trigger entries.
+
 A Diff is a thin wrapper map — a flat sequence of Diff entries plus both sides'
 Snapshot provenance — produced by `diff(live, declared)`. Each entry is one
 self-contained semantic difference: a target-relative change kind (`added` =
