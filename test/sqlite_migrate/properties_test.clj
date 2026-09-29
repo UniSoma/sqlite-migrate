@@ -148,7 +148,11 @@
         (empty? (:unhandled plan))
         (m/drift? forward)
         (every? (fn [{[object nm] :path}]
-                  (and (= :table object) (contains? named (g/fold nm))))
+                  (case object
+                    :table (contains? named (g/fold nm))
+                    :view (and (= :change-view (:kind (:mutation scenario)))
+                            (= "v_main" (g/fold nm)))
+                    false))
           (:entries forward))))))
 
 (defspec round-trip-property trials

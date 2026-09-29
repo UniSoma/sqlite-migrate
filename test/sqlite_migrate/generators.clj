@@ -558,14 +558,34 @@
                   (update-table live nm #(assoc % :name "znt2"))
                   {:kind :rename-table :table nm :to "znt2"}
                   [{:directive :rename-table :from (id-str nm) :to "znt2"}])
-              (assoc :table-rename [nm "znt2"]))))))))
+              (assoc :table-rename [nm "znt2"]))))
+        (let [t1 (first tables)
+              from-t1 (str " FROM " (qid (:name t1)))
+              v-main? #(str/starts-with? % "CREATE VIEW \"v_main\"")]
+          (when (some v-main? (:views live))
+            ;; change-view: v_main gains a constant column, sometimes
+            ;; while a reorder rebuilds the table it reads — v_chain,
+            ;; when present, then reads a missing view during the
+            ;; Rebuild's rename unless phase 1 takes it along (ADR 0026)
+            [(gen/let [rebuild? (if (> (count (:columns t1)) 1) gen/boolean (gen/return false))]
+               (let [target (update live :views
+                              (fn [vs] (mapv #(if (v-main? %)
+                                                (str/replace-first % from-t1 (str ", 1 AS \"zk\"" from-t1))
+                                                %)
+                                         vs)))]
+                 (gen/return
+                   (scenario-map live
+                     (cond-> target rebuild? (update-table (:name t1) rotate-columns))
+                     {:kind :change-view :table (:name t1) :view "v_main" :rebuild? rebuild?}
+                     []))))]))))))
 
 (defn gen-mutation
   "Generator of a scenario for `live`: `{:live :target :mutation
   :directives}` (plus `:table-rename` when the mutation renames a
   table), the target one perturbation away — a drop-table may also
-  rebuild one table beside it — and renames arriving with their
-  matching Directive."
+  rebuild one table beside it, and a change to `v_main` may rebuild the
+  table it reads — and renames arriving with their matching Directive.
+  A change to `v_main` carries that table under `:table`."
   [live]
   (gen/one-of (vec (mutation-gens live))))
 

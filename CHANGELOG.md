@@ -26,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Plan that changes a view drops each surviving view and trigger that reads
+  it, directly or through a chain of views, together with the view. It
+  re-creates them from their stored SQL after the tables change. They used to
+  stay in place while the view was missing. SQLite reads the whole schema again
+  during a Rebuild, a table rename, a column rename, and a column drop, so any
+  of these failed with `no such table` on the first reader, and `apply!` rolled
+  back. For the same reason, a Rebuild drops a trigger of its table that reads
+  such a view before the tables change, and creates it after they change. A
+  Plan that changes only a view now also drops and re-creates the view's
+  readers.
 - A Rebuild drops and re-creates each view that reads the rebuilt table through
   a chain of views, and each trigger that refers to one of those views. It used to
   drop only the views and triggers that named the table itself. The rename at

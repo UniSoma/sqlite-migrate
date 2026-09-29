@@ -121,6 +121,14 @@ dependents — subsuming all of that table's changes at once. The copy maps
 columns by name only; it never transforms values.
 _Avoid_: table recreation, copy migration
 
+**Reader**:
+A surviving view or trigger that reads a changed view — directly, or through
+another reader. A Plan drops each reader together with the changed view and
+creates it again from its Stored CREATE sql once the tables have changed, so
+nothing reads a missing view while the tables change; each of its Ops serves
+the changed views' Diff entries (ADR 0026).
+_Avoid_: dependent (reserved for what a Rebuild drops around its rename)
+
 **Apply**:
 The effectful edge that executes a Plan on a connection: a dumb fold over the
 Ops in plan order, inside the executor-owned transaction/FK frame, always

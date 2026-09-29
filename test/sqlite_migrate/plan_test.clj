@@ -48,21 +48,30 @@
            [(:path entry) (mapv (juxt :class :code) refusals)]))
     (:unhandled pl)))
 
-(defn- converges?
+(defn- applied
   "Apply `live-decl`'s statements to a fresh live database, plan against
-  `declared-decl`, apply!, and report whether the residual diff is
-  empty. Exercises the planned SQL against real SQLite."
+  `declared-decl` under `plan-opts`, apply!, and return `(f live-conn
+  declared-snapshot)` while the live database is still open."
+  [live-decl declared-decl plan-opts f]
+  (with-open [live (sql-jdbc/in-memory)
+              pristine (sql-jdbc/in-memory)]
+    (when (seq live-decl)
+      (p/execute-batch! live (vec live-decl)))
+    (let [live-snap (m/snapshot live)
+          declared (m/declared-snapshot pristine declared-decl)
+          pl (m/plan live-snap declared (m/diff live-snap declared) plan-opts)]
+      (m/apply! live pl)
+      (f live declared))))
+
+(defn- converges?
+  "Apply `live-decl` to a fresh live database, plan against
+  `declared-decl` under `plan-opts`, apply!, and report whether the
+  residual diff is empty. Exercises the planned SQL against real
+  SQLite."
   ([live-decl declared-decl] (converges? live-decl declared-decl {}))
-  ([live-decl declared-decl apply-opts]
-    (with-open [live (sql-jdbc/in-memory)
-                pristine (sql-jdbc/in-memory)]
-      (when (seq live-decl)
-        (p/execute-batch! live (vec live-decl)))
-      (let [live-snap (m/snapshot live)
-            declared (m/declared-snapshot pristine declared-decl)
-            pl (m/plan live-snap declared (m/diff live-snap declared))]
-        (m/apply! live pl apply-opts)
-        (not (m/drift? (m/diff (m/snapshot live) declared)))))))
+  ([live-decl declared-decl plan-opts]
+    (applied live-decl declared-decl plan-opts
+      (fn [live declared] (not (m/drift? (m/diff (m/snapshot live) declared)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Capabilities
@@ -273,6 +282,160 @@
     (is (= #{[:view "v"]} (:serves (peek (:ops pl))))
       "the retained trigger's recreate serves the view entry")
     (is (converges? live declared))))
+
+;; ---------------------------------------------------------------------------
+;; Readers of a changed view (ADR 0026): SQLite checks the whole schema
+;; again during ALTER TABLE RENAME, RENAME COLUMN and DROP COLUMN, so no
+;; view or trigger may read a changed view between phases 1 and 5
+
+(deftest rebuild-applies-while-a-surviving-view-reads-a-changed-view
+  (let [live ["CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"
+              "CREATE VIEW v1 AS SELECT a FROM t"
+              "CREATE VIEW v2 AS SELECT a FROM v1"]
+        declared ["CREATE TABLE t (a INTEGER, UNIQUE (a))"
+                  "CREATE VIEW v1 AS SELECT a, a AS b FROM t"
+                  "CREATE VIEW v2 AS SELECT a FROM v1"]]
+    (is (converges? live declared)
+      "apply! succeeds and v1 and v2 stand Equivalent to the Declaration")))
+
+(deftest rename-table-applies-while-a-surviving-view-reads-a-changed-view
+  (let [live ["CREATE TABLE t (a INTEGER)"
+              "CREATE VIEW v1 AS SELECT a FROM t"
+              "CREATE VIEW v2 AS SELECT a FROM v1"]
+        declared ["CREATE TABLE t2 (a INTEGER)"
+                  "CREATE VIEW v1 AS SELECT a FROM t2"
+                  "CREATE VIEW v2 AS SELECT a FROM v1"]]
+    (is (converges? live declared {:directives [{:directive :rename-table :from "t" :to "t2"}]})
+      "apply! succeeds and v1 and v2 stand Equivalent to the Declaration")))
+
+(deftest column-alters-apply-while-a-surviving-view-reads-a-changed-view
+  (let [shared ["CREATE VIEW v2 AS SELECT a FROM v1"]]
+    (testing "an authorized :rename-column applies and converges"
+      (is (converges? (into ["CREATE TABLE t (a INTEGER, b INTEGER)"
+                             "CREATE VIEW v1 AS SELECT a FROM t"] shared)
+            (into ["CREATE TABLE t (a INTEGER, c INTEGER)"
+                   "CREATE VIEW v1 AS SELECT a, c FROM t"] shared)
+            {:directives [{:directive :rename-column :table "t" :from "b" :to "c"}]})))
+    (testing "an authorized :drop-column applies and converges"
+      (is (converges? (into ["CREATE TABLE t (a INTEGER, b INTEGER)"
+                             "CREATE VIEW v1 AS SELECT a, b FROM t"] shared)
+            (into ["CREATE TABLE t (a INTEGER)"
+                   "CREATE VIEW v1 AS SELECT a FROM t"] shared)
+            {:directives [{:directive :drop-column :table "t" :column "b"}]})))))
+
+(deftest rename-table-keeps-the-triggers-that-read-a-changed-view
+  ;; neither trigger names t, so only the reader rule keeps the rename
+  ;; from reparsing them while v1 is missing
+  (let [shared ["CREATE TABLE w (n INTEGER)"
+                "CREATE VIEW v2 AS SELECT a FROM v1"
+                "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT a FROM v1; END"
+                "CREATE TRIGGER v2_ins INSTEAD OF INSERT ON v2 BEGIN INSERT INTO w VALUES (new.a); END"]
+        live (into ["CREATE TABLE t (a INTEGER)" "CREATE VIEW v1 AS SELECT a FROM t"] shared)
+        declared (into ["CREATE TABLE t2 (a INTEGER)" "CREATE VIEW v1 AS SELECT a FROM t2"] shared)
+        opts {:directives [{:directive :rename-table :from "t" :to "t2"}]}]
+    (is (converges? live declared opts)
+      "apply! succeeds and both triggers stand Equivalent to the Declaration")
+    (is (= [{:n 7}]
+          (applied live declared opts
+            (fn [conn _]
+              (p/execute-batch! conn ["INSERT INTO v2 VALUES (7)"])
+              (p/execute-query conn "SELECT n FROM w" []))))
+      "the INSTEAD OF trigger fires, and so does the trigger it sets off")))
+
+(deftest a-later-rebuild-applies-after-a-rebuilt-tables-trigger-reads-a-changed-view
+  ;; w rebuilds before x; were w's Rebuild to create w_trg again, x's
+  ;; rename would fail on it while v1 is missing
+  (let [live ["CREATE TABLE w (n INTEGER NOT NULL, PRIMARY KEY (n))"
+              "CREATE TABLE x (m INTEGER NOT NULL, PRIMARY KEY (m))"
+              "CREATE VIEW v1 AS SELECT n FROM w"
+              "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT n FROM v1; END"]
+        tables ["CREATE TABLE w (n INTEGER, UNIQUE (n))"
+                "CREATE TABLE x (m INTEGER, UNIQUE (m))"
+                "CREATE VIEW v1 AS SELECT n, 1 AS k FROM w"]]
+    (testing "a surviving trigger drops in phase 1 and is created again in phase 5, once"
+      (let [declared (conj tables "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT n FROM v1; END")
+            pl (plan-of live declared)]
+        (is (= [[:drop-trigger [:table "w" :trigger "w_trg"]]
+                [:drop-view [:view "v1"]]
+                [:rebuild-table [:table "w"]]
+                [:rebuild-table [:table "x"]]
+                [:create-view [:view "v1"]]
+                [:create-trigger [:table "w" :trigger "w_trg"]]]
+              (mapv (juxt :kind :path) (:ops pl))))
+        (is (not-any? #(re-find #"CREATE TRIGGER" %) (:sql (nth (:ops pl) 2)))
+          "w's Rebuild leaves the trigger out")
+        (is (converges? live declared))))
+    (testing "a changed trigger: the Rebuild drops it in phase 1 and leaves its create to phase 5"
+      (let [declared (conj tables "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT n FROM v1 WHERE n > 0; END")
+            pl (plan-of live declared)]
+        (is (= [:drop-trigger :drop-view :rebuild-table :rebuild-table :create-view :create-trigger]
+              (mapv :kind (:ops pl))))
+        (is (= #{[:view "v1"] [:table "w" :trigger "w_trg"]}
+              (:serves (first (:ops pl))) (:serves (peek (:ops pl))))
+          "the drop and the create each serve the changed view and the trigger's own entry")
+        (is (converges? live declared))))))
+
+(deftest an-earlier-rebuild-applies-while-a-rebuilt-tables-trigger-reads-a-changed-view
+  ;; a rebuilds before w, whose live w_trg the Declaration changes or
+  ;; removes: it is no survivor, yet it stands until w's Rebuild drops
+  ;; w, so a's rename would reparse it while v1 is missing
+  (let [live ["CREATE TABLE a (m INTEGER NOT NULL, PRIMARY KEY (m))"
+              "CREATE TABLE w (n INTEGER NOT NULL, PRIMARY KEY (n))"
+              "CREATE VIEW v1 AS SELECT n FROM w"
+              "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT n FROM v1; END"]
+        tables ["CREATE TABLE a (m INTEGER, UNIQUE (m))"
+                "CREATE TABLE w (n INTEGER, UNIQUE (n))"
+                "CREATE VIEW v1 AS SELECT n, 1 AS k FROM w"]]
+    (testing "a changed trigger applies and converges"
+      (is (converges? live (conj tables "CREATE TRIGGER w_trg AFTER INSERT ON w BEGIN SELECT n FROM v1 WHERE n > 0; END"))))
+    (testing "a removed trigger applies and converges"
+      (is (converges? live tables)))))
+
+(deftest rename-table-applies-while-the-renamed-tables-trigger-reads-a-changed-view
+  ;; t_trg's text names t, so the Diff pairs it as a changed trigger of
+  ;; the renamed table; the rename plan drops it and creates its
+  ;; declared text, and the reader pass must leave it alone
+  (let [live ["CREATE TABLE w (n INTEGER)"
+              "CREATE VIEW v1 AS SELECT n FROM w"
+              "CREATE TABLE t (a INTEGER NOT NULL, PRIMARY KEY (a))"
+              "CREATE TRIGGER t_trg AFTER INSERT ON t BEGIN SELECT n FROM v1; END"]
+        declared-with (fn [t2]
+                        ["CREATE TABLE w (n INTEGER)"
+                         "CREATE VIEW v1 AS SELECT n, 1 AS k FROM w"
+                         t2
+                         "CREATE TRIGGER t_trg AFTER INSERT ON t2 BEGIN SELECT n FROM v1; END"])
+        opts {:directives [{:directive :rename-table :from "t" :to "t2"}]}]
+    (testing "renamed in place, it applies and converges"
+      (is (converges? live (declared-with "CREATE TABLE t2 (a INTEGER NOT NULL, PRIMARY KEY (a))") opts)))
+    (testing "renamed by a Rebuild, it applies and converges"
+      (is (converges? live (declared-with "CREATE TABLE t2 (a INTEGER, UNIQUE (a))") opts)))))
+
+(deftest a-changed-views-reader-drops-in-phase-one-and-is-created-in-phase-five
+  (let [pl (plan-of ["CREATE TABLE t (a INTEGER)"
+                     "CREATE VIEW v1 AS SELECT a FROM t"
+                     "CREATE VIEW v2 AS SELECT a FROM v1"]
+             ["CREATE TABLE t (a INTEGER)"
+              "CREATE VIEW v1 AS SELECT a, 1 AS k FROM t"
+              "CREATE VIEW v2 AS SELECT a FROM v1"])]
+    (is (= [[:drop-view [:view "v1"] #{[:view "v1"]}]
+            [:drop-view [:view "v2"] #{[:view "v1"]}]
+            [:create-view [:view "v1"] #{[:view "v1"]}]
+            [:create-view [:view "v2"] #{[:view "v1"]}]]
+          (mapv (juxt :kind :path :serves) (:ops pl))))
+    (is (= ["CREATE VIEW v2 AS SELECT a FROM v1"] (:sql (peek (:ops pl))))
+      "the reader is created again from its live stored sql")))
+
+(deftest rename-table-applies-under-a-chain-of-readers
+  (let [shared ["CREATE VIEW v2 AS SELECT a FROM v1"
+                "CREATE VIEW v3 AS SELECT a FROM v2"]
+        live (into ["CREATE TABLE t (a INTEGER)" "CREATE VIEW v1 AS SELECT a FROM t"] shared)
+        declared (into ["CREATE TABLE t2 (a INTEGER)" "CREATE VIEW v1 AS SELECT a FROM t2"] shared)
+        opts {:directives [{:directive :rename-table :from "t" :to "t2"}]}]
+    (is (= [[:drop-view [:view "v1"]] [:drop-view [:view "v2"]] [:drop-view [:view "v3"]]
+            [:rename-table [:table "t"]]
+            [:create-view [:view "v1"]] [:create-view [:view "v2"]] [:create-view [:view "v3"]]]
+          (mapv (juxt :kind :path) (:ops (plan-of live declared opts)))))
+    (is (converges? live declared opts))))
 
 ;; ---------------------------------------------------------------------------
 ;; Restricted drop column and the legalizing order

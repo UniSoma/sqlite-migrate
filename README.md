@@ -55,7 +55,7 @@ into one table Rebuild.
 | Foreign keys | The planner can add, drop, and change a foreign key. It compares the child columns, the parent table, the parent columns, the two actions, `MATCH`, and the deferrability. |
 | Indexes | The planner can create, drop, and change an index. An index can be ordinary, unique, expression, or partial. The planner compares the key order, the collation, and the sort direction of each key. |
 | Triggers | The planner can create, drop, and replace a trigger on a table or on a view. |
-| Views | The planner can create, drop, and replace a view. A view is opaque: a change to its text replaces the full view. The planner creates the declared triggers of the view again with it. |
+| Views | The planner can create, drop, and replace a view. A view is opaque: a change to its text replaces the full view. The planner creates the declared triggers of the view again with it. When a view changes, the planner also drops each view and each trigger that reads it, directly or through a chain of views, before it changes the tables. It creates them again after it changes the tables. |
 | Virtual tables | The planner can create and drop a virtual table. It cannot change a virtual table, because the data of the module can be in shadow tables. |
 
 The planner has these in-place operations:
@@ -123,7 +123,9 @@ SQLite reads each view and each trigger a second time during the rename in the
 Rebuild. For this reason, the Rebuild drops each view that reads the table, and
 each view that reads the table through a chain of views. It also drops each trigger
 that refers to the table or to one of those views. Then it creates them again. It
-creates each view after the views that it reads.
+creates each view after the views that it reads. A trigger of the table that reads
+a changed view, or a view that reads one, is an exception. The planner drops it
+before it changes the tables, and creates it after it changes the tables.
 
 A Gate examines the rows of the live table before a change that adds a constraint
 or makes a constraint more strict. A Gate can do this for these constraints:
