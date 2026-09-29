@@ -6,7 +6,7 @@ type: bug
 priority: 1
 mode: afk
 created: '2026-09-29T16:39:14.044516517Z'
-updated: '2026-09-29T20:36:58.033105958Z'
+updated: '2026-09-29T22:26:07.209842423Z'
 closed: '2026-09-29T20:36:58.033105958Z'
 acceptance:
 - title: A regression deftest reproducing the view-over-view Rebuild fails before the fix and passes after, with v1 and v2 present and Equivalent afterwards
@@ -27,6 +27,7 @@ links:
 - sqm-01m3q0j6cb7m
 - sqm-01m3q53h6bq6
 - sqm-01m3qdd02a9a
+- sqm-01m3qmcx89yp
 deps:
 - sqm-01m3q53h6bq6
 tags:

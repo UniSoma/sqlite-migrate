@@ -6,7 +6,7 @@ type: bug
 priority: 2
 mode: afk
 created: '2026-09-29T20:23:50.084528713Z'
-updated: '2026-09-29T21:13:19.668077329Z'
+updated: '2026-09-29T22:26:07.209842423Z'
 closed: '2026-09-29T21:13:19.668077329Z'
 acceptance:
 - title: A regression deftest for each reproduction (Rebuild and in-place :rename-table) fails before the fix and passes after, with v1 and v2 present and Equivalent afterwards
@@ -29,6 +29,7 @@ acceptance:
   done: true
 links:
 - sqm-01m3q0hqvwa6
+- sqm-01m3qmcx89yp
 tags:
 - settled
 ---

@@ -6,7 +6,7 @@ type: bug
 priority: 1
 mode: afk
 created: '2026-09-29T17:58:51.328249202Z'
-updated: '2026-09-29T19:44:46.448826393Z'
+updated: '2026-09-29T22:26:07.209842423Z'
 closed: '2026-09-29T19:44:46.448826393Z'
 acceptance:
 - title: 'A regression deftest with the repro below fails before the fix and passes after: apply! succeeds, gone and gone_t are absent, a is Equivalent to its declared shape'
@@ -22,6 +22,7 @@ acceptance:
 links:
 - sqm-01m3q0kapxa2
 - sqm-01m3q0hqvwa6
+- sqm-01m3qmcx89yp
 ---
 
 ## Description
