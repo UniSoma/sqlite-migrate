@@ -1132,21 +1132,27 @@
       routed-ops)))
 
 (defn- surviving-dependents
-  "The live views and triggers that survive the plan's phase-1 drops —
-  the objects a drop-column must stay legal against and a rebuild's
-  rename must not orphan. `:views` carries each surviving view with
-  its surviving triggers; `:table-triggers` each surviving trigger of
-  a table parent — names and stored CREATE sql. A :changed object's
-  recreate lands only in phase 5, so a dropped view excludes its
-  triggers too."
-  [live-snapshot entries]
+  "The live views and triggers that survive the plan's phase-1 and
+  phase-2 drops — the objects a drop-column must stay legal against
+  and a rebuild's rename must not orphan. `:views` carries each
+  surviving view with its surviving triggers; `:table-triggers` each
+  surviving trigger of a table parent — names and stored CREATE sql. A
+  :changed object's recreate lands only in phase 5, so a dropped view
+  excludes its triggers too, and so does a table removed under a
+  :drop-table Directive in `claims`: its triggers nest in its
+  whole-value entry and leave with it in phase 2 (ADR 0023)."
+  [live-snapshot claims entries]
   (let [dropped? (fn [e] (contains? #{:removed :changed} (:kind e)))
-        dropped-views (into #{}
-                        (comp (filter #(and (= :view (first (:path %)))
+        whole-folds (fn [object pred]
+                      (into #{}
+                        (comp (filter #(and (= object (first (:path %)))
                                          (= 2 (count (:path %)))
-                                         (dropped? %)))
+                                         (pred %)))
                           (map (comp u/fold-name second :path)))
-                        entries)
+                        entries))
+        dropped-tables (into #{} (filter (:drop-tables claims))
+                         (whole-folds :table #(= :removed (:kind %))))
+        dropped-views (whole-folds :view dropped?)
         dropped-triggers (into #{}
                            (comp (filter #(and (= :trigger (nth (:path %) 2 nil))
                                             (dropped? %)))
@@ -1160,6 +1166,7 @@
                        :when (not (contains? dropped-views (u/fold-name nm)))]
                    {:name nm :sql (:sql (meta v)) :triggers (surviving-triggers v)}))
      :table-triggers (vec (for [[tn t] (sort-by key (:tables live-snapshot))
+                                :when (not (contains? dropped-tables (u/fold-name tn)))
                                 trg (surviving-triggers t)]
                             (assoc trg :table tn)))}))
 
@@ -1842,9 +1849,9 @@
 
 (defn- planning-context-for
   "The planning context every table planner threads: both Snapshots and
-  what the phase-1 drops leave standing (ADR 0006)."
-  [live declared entries]
-  (let [dependents (surviving-dependents live entries)]
+  what the phase-1 and phase-2 drops leave standing (ADR 0006)."
+  [live declared claims entries]
+  (let [dependents (surviving-dependents live claims entries)]
     {:live-snapshot live
      :declared-snapshot declared
      :surviving-dependents dependents
@@ -1907,8 +1914,8 @@
           directives (vec (:directives opts))
           _ (validate-directives! directives)
           entries (:entries diff)
-          planning-context (planning-context-for live declared entries)
           claims (resolve-claims directives)
+          planning-context (planning-context-for live declared claims entries)
           groups (partition-by entry-group-key entries)
           fused (fused-table-pairs directives groups)
           consumed (fused-group-keys fused)

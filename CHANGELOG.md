@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Rebuild no longer drops and re-creates the triggers of a table that a
+  `:drop-table` Directive removes in the same Plan. Those triggers leave with
+  their table. When a trigger's body named a rebuilt table, the Rebuild used to
+  emit `DROP TRIGGER` for a trigger that had already been dropped, and `apply!`
+  failed and rolled back. Such a trigger also no longer blocks an in-place
+  `DROP COLUMN` on a column its body mentions: the column now drops in place
+  where it used to force a Rebuild.
 - `declared-snapshot` realizes every statement of a multi-statement Declaration
   string. It used to realize only the first and ignore the rest without a
   word, so a Declaration read from a `schema.sql` file produced a Plan that

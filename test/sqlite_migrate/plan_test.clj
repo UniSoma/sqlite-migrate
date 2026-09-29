@@ -335,6 +335,26 @@
           (kinds+sql pl)))
     (is (converges? live declared))))
 
+(deftest dropped-tables-trigger-leaves-drop-column-legal
+  ;; ADR 0023: a trigger on a table dropped under a :drop-table
+  ;; Directive leaves with its table in phase 2, before the phase-3
+  ;; drop-column, so its mention of the column blocks nothing
+  (let [live ["CREATE TABLE t (a INTEGER, g INTEGER GENERATED ALWAYS AS (a * 2) VIRTUAL)"
+              "CREATE TABLE gone (y)"
+              "CREATE TRIGGER gone_t AFTER INSERT ON gone BEGIN SELECT g FROM t; END"]
+        declared ["CREATE TABLE t (a INTEGER)"]
+        pl (plan-of live declared {:directives [{:directive :drop-table :table "gone"}]})]
+    (is (= [[:drop-table ["DROP TABLE \"gone\""]]
+            [:drop-column ["ALTER TABLE \"t\" DROP COLUMN \"g\""]]]
+          (kinds+sql pl)))
+    (with-open [conn (sql-jdbc/in-memory)]
+      (p/execute-batch! conn live)
+      (let [live-snap (m/snapshot conn)
+            declared-snap (snap declared)]
+        (m/apply! conn (m/plan live-snap declared-snap (m/diff live-snap declared-snap)
+                         {:directives [{:directive :drop-table :table "gone"}]}))
+        (is (not (m/drift? (m/diff (m/snapshot conn) declared-snap))))))))
+
 (deftest foreign-key-column-drops-are-rebuild-only
   ;; SQLite rejects DROP COLUMN on a column named in a FOREIGN KEY
   ;; clause; the vanishing FK routes the table to a rebuild, but the

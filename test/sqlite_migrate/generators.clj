@@ -269,6 +269,11 @@
   (update schema :tables
     (fn [ts] (mapv #(if (= (fold (:name %)) (fold tname)) (f %) %) ts))))
 
+(defn- rotate-columns
+  "`table` with its first column moved last."
+  [table]
+  (update table :columns (fn [cs] (conj (vec (rest cs)) (first cs)))))
+
 (defn- rename-in-table
   "Structural column rename inside a table: the column itself plus every
   structured reference (table PK, uniques, plain index columns, FK
@@ -445,8 +450,7 @@
           ;; pure reorder forces the rebuild path
           (gen/return
             (scenario-map live
-              (update-table live (:name t)
-                #(update % :columns (fn [cs] (conj (vec (rest cs)) (first cs)))))
+              (update-table live (:name t) rotate-columns)
               {:kind :reorder :table (:name t)}
               [])))
         (for [t tables
@@ -508,18 +512,37 @@
               {:kind :toggle-without-rowid :table (:name t) :adding? (not (:without-rowid? t))}
               [])))
         (for [t tables
-              :let [nm (:name t)]
+              :let [nm (:name t)
+                    rebuildables (vec (for [b tables
+                                            :when (and (not= (fold (:name b)) (fold nm))
+                                                    (> (count (:columns b)) 1))]
+                                        (:name b)))]
               :when (and (not (fk-ref-tables (fold nm)))
                       (not (text-referenced? texts nm)))]
-          ;; drop-table, authorized half the time
-          (gen/let [authorized? gen/boolean]
-            (gen/return
-              (scenario-map live
-                (update live :tables
-                  (fn [ts] (vec (remove #(= (fold (:name %)) (fold nm)) ts))))
-                {:kind :drop-table :table nm :authorized? authorized?}
-                (when authorized?
-                  [{:directive :drop-table :table (id-str nm)}])))))
+          ;; drop-table, authorized half the time — and sometimes
+          ;; carrying a trigger whose body mentions another table while
+          ;; a reorder rebuilds that table: the dropped table's trigger
+          ;; must leave with it, never ride the Rebuild as a dependent
+          ;; (ADR 0023)
+          (gen/let [authorized? gen/boolean
+                    rebuilt (if (seq rebuildables)
+                              (gen/one-of [(gen/return nil) (gen/elements rebuildables)])
+                              (gen/return nil))]
+            (let [live (if rebuilt
+                         (update-table live nm
+                           #(update % :triggers (fnil conj [])
+                              (str "CREATE TRIGGER \"tg_gone\" AFTER INSERT ON " (qid nm)
+                                " BEGIN SELECT 1 FROM " (qid rebuilt) "; END")))
+                         live)
+                  target (update live :tables
+                           (fn [ts] (vec (remove #(= (fold (:name %)) (fold nm)) ts))))]
+              (gen/return
+                (scenario-map live
+                  (cond-> target rebuilt (update-table rebuilt rotate-columns))
+                  (cond-> {:kind :drop-table :table nm :authorized? authorized?}
+                    rebuilt (assoc :rebuilt rebuilt))
+                  (when authorized?
+                    [{:directive :drop-table :table (id-str nm)}]))))))
         (for [t tables
               :let [nm (:name t)]
               :when (and (not (fk-ref-tables (fold nm)))
@@ -535,8 +558,9 @@
 (defn gen-mutation
   "Generator of a scenario for `live`: `{:live :target :mutation
   :directives}` (plus `:table-rename` when the mutation renames a
-  table), the target one perturbation away and renames arriving with
-  their matching Directive."
+  table), the target one perturbation away — a drop-table may also
+  rebuild one table beside it — and renames arriving with their
+  matching Directive."
   [live]
   (gen/one-of (vec (mutation-gens live))))
 
@@ -690,10 +714,12 @@
 (defn mutated-table-names
   "The folded table names `scenario`'s mutation can put in a Diff
   entry's path: the mutated table, plus its post-rename spelling when
-  the mutation renames the table."
+  the mutation renames the table, plus the table a drop-table rebuilds
+  beside it."
   [{:keys [mutation table-rename]}]
   (cond-> #{(fold (:table mutation))}
-    table-rename (conj (fold (second table-rename)))))
+    table-rename (conj (fold (second table-rename)))
+    (:rebuilt mutation) (conj (fold (:rebuilt mutation)))))
 
 (def gen-scenario
   "A full generative trial: a `gen-rowless-scenario` plus the live row

@@ -188,6 +188,32 @@
     (testing "the rebuild executes and every dependent is standing afterwards"
       (is (converges? live declared)))))
 
+(deftest rebuild-leaves-a-dropped-tables-triggers-alone
+  ;; ADR 0023: the objects on a dropped table leave by structure.
+  ;; gone's trigger nests in gone's whole-value :removed entry, so
+  ;; phase 2 drops it with gone — a Rebuild of a table its body
+  ;; mentions must not drop or recreate it again
+  (with-open [live (sql-jdbc/in-memory)
+              pristine (sql-jdbc/in-memory)]
+    (p/execute-batch! live
+      ["CREATE TABLE a (x INTEGER NOT NULL, PRIMARY KEY (x))"
+       "CREATE TABLE gone (y)"
+       "CREATE TRIGGER gone_t AFTER INSERT ON gone BEGIN INSERT INTO a VALUES (new.y); END"])
+    (let [declared (m/declared-snapshot pristine ["CREATE TABLE a (x INTEGER, UNIQUE (x))"])
+          live-snap (m/snapshot live)
+          pl (m/plan live-snap declared (m/diff live-snap declared)
+               {:directives [{:directive :drop-table :table "gone"}]})]
+      (is (= [:drop-table :rebuild-table] (mapv :kind (:ops pl))))
+      (is (empty? (:unhandled pl)))
+      (testing "the Rebuild neither drops nor recreates gone_t"
+        (is (not-any? #(re-find #"(?i)TRIGGER \"?gone_t" %)
+              (:sql (second (:ops pl))))))
+      (testing "apply! succeeds, gone and gone_t are absent, and a is Equivalent to its declared shape"
+        (m/apply! live pl)
+        (is (empty? (p/execute-query live
+                      "SELECT name FROM sqlite_schema WHERE name IN ('gone', 'gone_t')" [])))
+        (is (not (m/drift? (m/diff (m/snapshot live) declared))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Data preservation (ADR 0010): multiset row survival, rowid stability,
 ;; AUTOINCREMENT continuity

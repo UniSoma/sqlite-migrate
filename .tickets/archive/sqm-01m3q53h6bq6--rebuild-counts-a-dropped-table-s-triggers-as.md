@@ -1,23 +1,24 @@
 ---
 id: sqm-01m3q53h6bq6
 title: Rebuild counts a dropped table's triggers as surviving dependents
-status: open
+status: closed
 type: bug
 priority: 1
 mode: afk
 created: '2026-09-29T17:58:51.328249202Z'
-updated: '2026-09-29T17:58:51.328249202Z'
+updated: '2026-09-29T19:44:46.448826393Z'
+closed: '2026-09-29T19:44:46.448826393Z'
 acceptance:
 - title: 'A regression deftest with the repro below fails before the fix and passes after: apply! succeeds, gone and gone_t are absent, a is Equivalent to its declared shape'
-  done: false
+  done: true
 - title: A trigger on a table dropped by :drop-table is never emitted as DROP TRIGGER or CREATE TRIGGER by any Rebuild in the same Plan
-  done: false
+  done: true
 - title: The property-suite generators produce a dropped table whose trigger body mentions a rebuilt table, and the suite is green
-  done: false
+  done: true
 - title: CHANGELOG records the fix
-  done: false
+  done: true
 - title: bb test passes; clj-kondo --lint src test ci is clean
-  done: false
+  done: true
 links:
 - sqm-01m3q0kapxa2
 - sqm-01m3q0hqvwa6
@@ -43,3 +44,9 @@ Reproduced on f255d1e, in memory:
 Plan: op 0 `DROP TABLE "gone"`; op 1 `:rebuild-table a` whose SQL includes `DROP TRIGGER "gone_t"` and, after the rename, `CREATE TRIGGER gone_t AFTER INSERT ON gone ...`. `apply!` throws `:sqlite-error` at `:op-index 1`, `:statement "DROP TRIGGER \"gone_t\""` (no such trigger: gone_t).
 
 Expected: a dropped table's triggers leave with it and are never Rebuild dependents. ADR 0023 states the rule ("Kept objects leave with the tables they depend on"), and the keep build relies on it, so fix it with or before that work.
+
+## Notes
+
+**2026-09-29T19:44:46.448826393Z**
+
+surviving-dependents now leaves out the triggers of a table removed under a :drop-table Directive: they nest in its whole-value :removed entry and leave with it in phase 2 (ADR 0023). A Rebuild of a table such a trigger mentions no longer drops and re-creates it, and the drop-column legality check no longer counts it, so that column drops in place. Covered by a regression deftest in rebuild_test (the repro), a drop-column deftest in plan_test, and a drop-table mutation in the property generators that plants a trigger naming a rebuilt table; with the fix reverted, the property suite fails with 'no such trigger: tg_gone'. CHANGELOG records it under Fixed.
