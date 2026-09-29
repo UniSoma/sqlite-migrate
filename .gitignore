@@ -6,3 +6,4 @@ target/
 .clj-kondo/*
 !.clj-kondo/config.edn
 classes/
+/data/

@@ -1,7 +1,8 @@
 ---
 name: knot
-description: Ticket tracking through the `knot` CLI — markdown tickets under `.tickets/`, config in `.knot.edn`. Use when a project carries either marker, when an id matches `<prefix>-01<base32>` (`kno-01kqa9sh`), or on ticket-shaped intent — "what's next?", "the backlog", "show me <id>", "track this", "close this" — including an autonomous agent picking up unblocked work. Hosted-tracker ids (`GH-1234`, `ENG-1234`) belong to their own tools.
+description: Ticket tracking through the `knot` CLI — markdown tickets under `.tickets/`, config in `.knot.edn`. Use when a project carries either marker, when an id matches `<prefix>-01<base32>` (`kno-01kqa9sh`) or the document shape that nests inside it (`kno-01kqa9sh-d7f3k`), or on ticket-shaped intent — "what's next?", "the backlog", "show me <id>", "track this", "close this" — including an autonomous agent picking up unblocked work. Hosted-tracker ids (`GH-1234`, `ENG-1234`) belong to their own tools.
 ---
+<!-- installed by knot 0.15.0 -->
 
 # knot — file-based ticket tracker
 
@@ -12,9 +13,9 @@ explicit ask, since the user may already have a tracker.
 
 `knot --help` lists every command and `knot <cmd> --help` its flags, caveats, and examples; this skill carries the
 judgment help can't, and keeps no inventory of either on purpose. When the two disagree, the CLI wins — follow it and
-tell the user the skill has drifted. An unknown flag is rejected (`Unknown option: :bogus`, exit 1) rather than
-absorbed, and the canonical name varies by command (`--tag` on `list`, `--tags` on `create`), so a rejected flag sends
-you to that command's help.
+tell the user the skill has drifted; `knot skill install` rewrites it from the running binary. An unknown flag is
+rejected (`Unknown option: :bogus`, exit 1) rather than absorbed, and the canonical name varies by command (`--tag` on
+`list`, `--tags` on `create`), so a rejected flag sends you to that command's help.
 
 ## The CLI is the contract
 
@@ -78,8 +79,8 @@ flag repeatable; on `prime` a filter hits every section at once, so `knot prime 
 everywhere.
 
 Before composing a graph query (`--parent` / `--closure` / `--component`) or acting on a computed column (`LEV`, `CPL`,
-`LVL`, `CC`), load [`references/listing-filters-and-columns.md`](references/listing-filters-and-columns.md) — scope
-rules (live-induced vs corpus-wide), fail-fast cases, and what each number tells you to do are pinned there.
+`LVL`, `CC`), load [`references/graph.md`](references/graph.md) — scope rules (live-induced vs corpus-wide), fail-fast
+cases, and what each number tells you to do are pinned there.
 
 ### Partial ids
 
@@ -135,38 +136,26 @@ and `git checkout` is the recovery path.
 
 ### Transition gates
 
-Two gates block a transition with exit 1 and a JSON `error.code`:
+Three gates block a transition with exit 1 and a JSON `error.code`:
 
 - `acceptance_incomplete` — closing (any active→terminal move) with a frontmatter `:acceptance` entry still unchecked.
   Clear it by checking the box: `knot update <id> --ac 3 --done`, which composes with `--status`, so
   `knot update <id> --ac 3 --done --status closed` checks and closes in one call.
 - `open_children` — starting *or* closing a ticket that has a child in a non-terminal status. Clear it by finishing
   the children.
+- `missing_required_docs` — entering a status that `.knot.edn`'s `:required-docs` lists while the ticket lacks a
+  document of a required type. Clear it by attaching the document.
 
-Override either with `--force`: on close it needs `--summary "<reason>"` alongside (recorded as a note), on start it
+Override any of them with `--force`: on close it needs `--summary "<reason>"` alongside (recorded as a note), on start it
 stands alone. The full skip-condition matrix and the reason for that asymmetry are in
-[`references/lifecycle-gates.md`](references/lifecycle-gates.md).
+[`references/lifecycle.md`](references/lifecycle.md).
 
 ## Notes and revisions
 
-`knot add-note` appends a timestamped entry — the tool for observations captured mid-task. `knot update` replaces:
-`--description` the section, `--body` the entire body (destructive, git is the undo), fields and status in the same
-call, non-interactively — the tool for scripts and autonomous runs. `knot edit` opens `$EDITOR` and needs a TTY. To add
-to a ticket, reach for `add-note`.
-
-**A render is not a body.** Five sections in a `knot show` render — `## Acceptance Criteria`, `## Blockers`,
-`## Blocking`, `## Children`, `## Linked` — are synthesized from the `acceptance`, `deps`, `parent`, and `links` fields
-and marked in the render by an HTML comment naming the source. What you would have written under one goes through the
-owning field instead (`--add-ac`, `knot dep`, `--parent`, `knot link`). `--body` refuses those five names; near-synonyms
-are not refused and are the same mistake — a hand-written `## Blocked by`, `## Depends on`, or `## Parent document` is
-prose that stops matching the graph the moment the graph moves.
-
-**Replace vs delta.** `--tags` and `--external-ref` replace the whole list, so re-sending a list to add one value drops
-anything you hadn't read first. For a one-value change reach for the delta flags — `--add-tag` / `--remove-tag`,
-`--add-external-ref` / `--remove-external-ref`, `--add-ac` / `--remove-ac` — which leave the rest untouched.
-
-Address a criterion by the number `knot show` prints beside it rather than retyping it — real AC titles run to a
-paragraph — and batch flips in one write: `knot update <id> --ac 2 --ac 5 --done`.
+`knot add-note` appends a timestamped entry, `knot update` replaces (`--description` the section, `--body` the whole
+body), and `knot edit` opens `$EDITOR`. Before writing prose into a ticket, load
+[`references/writes.md`](references/writes.md) — which of the three fits, the six `knot show` sections that render a
+field and must never be hand-written, and the whole-list flags whose delta counterparts you want instead.
 
 ## Graph: deps vs links
 
@@ -179,13 +168,8 @@ report.
 
 ## Working autonomously
 
-`mode` is a peer dimension to status and priority: `afk` means an agent can run the ticket alone, `hitl` means a human
-is in the loop (the default for new tickets). Treat it as a contract — pick up a `hitl` ticket only when the user
-authorizes that specific ticket.
-
-Handed autonomy, the loop is `knot prime --mode afk` — run it unless a `SessionStart` reminder already put it in the
-conversation. It prints the sequence (enumerate → confirm → claim → note → update → close) and is the single source of
-truth for that sequence; this skill deliberately keeps no second copy to drift against it.
+`mode` is a contract, not a hint: `afk` means an agent can run the ticket alone, `hitl` — the default — means a human
+is in the loop. Handed autonomy, load [`references/autonomous.md`](references/autonomous.md) before picking anything up.
 
 ## JSON
 
@@ -211,8 +195,7 @@ knot check --json             | jq '.data.issues'
 
 Drive decision logic off `--json`; table output is for humans — column widths shift and titles contain whitespace.
 Per-command `data` shapes, the error-code and check-code catalogues, the strict-vs-soft partial-id resolution modes,
-and `prime`'s `stale` / `ready_to_close` fields are pinned in
-[`references/json-protocol.md`](references/json-protocol.md).
+and `prime`'s `stale` / `ready_to_close` fields are pinned in [`references/json.md`](references/json.md).
 
 ## When knot isn't the tracker
 
