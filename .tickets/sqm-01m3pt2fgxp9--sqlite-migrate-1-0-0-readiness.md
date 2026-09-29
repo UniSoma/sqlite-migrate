@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:02.523849786Z'
-updated: '2026-09-29T15:16:16.483316221Z'
+updated: '2026-09-29T16:40:52.244007515Z'
 tags:
 - wayfinder:map
 ---
@@ -28,16 +28,16 @@ Every decision between today's 0.2.0-SNAPSHOT and a 1.0.0 that can be frozen for
 ## Decisions so far
 
 - [Research: can babashka.sqlite or the sqlite3 CLI honour the Executor's Frame?](sqm-01m3pt45egw5): babashka.sqlite (FFI) fits the whole Executor contract and the unchanged suite passes in bb; the sqlite3 CLI's JSON corrupts values on current LTS CLIs; the core loads unchanged. Recommend babashka.sqlite; risk: experimental driver, host SQLite. Findings: docs/research/babashka-adapter.md on branch research/babashka-adapter.
+- [Assess the first consumer against today's SNAPSHOT](sqm-01m3pt45mm8c): Equivalence and Rebuild data safety held on the real file (no false drift and no missed change across 395 entries; every value kept). The upgrade can't apply because of a view-over-view Rebuild bug. The findings became three bugs outside the map plus the tickets "Decide how a Plan leaves consumer-owned live objects alone" and "Decide whether a Check result reports how many rows violate a Gate". The per-finding dispositions are in the ticket's note.
 
 ## Not yet specified
 
-- **Consumer findings.** Whatever the early assessment turns up — false drifts, surprising Plans, API friction, missing features — graduates into tickets once it's reported on "Assess the first consumer against today's SNAPSHOT".
-- **Documentation completeness for a 1.0 user.** What a 1.0 reader needs (reference vs guide, the babashka path, measured Rebuild costs, concurrency guidance, upgrade/compat policy page) can't be sharpened until the surface, the adapter and the concurrency decision settle.
-- **The late consumer gate.** How the frozen candidate is re-run against the consumer's file and what "no new findings" means — shaped by the 1.0 bar decision.
-- **Synthesize the handoff epic.** "Take sqlite-migrate to 1.0.0" from the closed map, once the frontier empties.
+- **Documentation completeness for a 1.0 user.** What a 1.0 reader needs (reference vs guide, the babashka path, measured Rebuild costs, concurrency guidance, upgrade/compat policy page, a guide from a `.sql` script to a Declaration, and how to archive Snapshots so they still plan) can't be sharpened until the surface, the adapter and the concurrency decision settle.
+- **The late consumer gate.** How the frozen candidate is re-run against the consumer's file and what "no new findings" means — shaped by the 1.0 bar decision. The early run never needed a Directive, so the late run should use a pack with a real rename or column drop. It can't pass until the bug "Rebuild drops and recreates every view that reads the table transitively" is fixed.
+- **Synthesize the handoff epic.** "Take sqlite-migrate to 1.0.0" from the closed map, once the frontier empties. It picks up whichever consumer-found bugs are still open ("Rebuild drops and recreates every view that reads the table transitively", "declared-snapshot realizes every statement of a multi-statement Declaration string", "declared-snapshot reports a failing statement's Declaration index and text").
 
 ## Out of scope
 
 - Maintainability of impl/plan.clj (1931 lines) — no public contract, refactorable after 1.0 without breaking anyone; not a soundness question.
 - Event callbacks / observability hooks — an optional opts key is purely additive after 1.0, and per-statement events would collide with ADR 0016's data-only Executor seam that the babashka adapter depends on; revisit once both runtimes exist.
-- Carried over from the closed map "sqlite-migrate design spec": other databases, CLI/GUI tooling, versioned-migration compatibility, writable_schema, row transformation beyond by-name copy, stage-then-swap as an Apply mode, i18n.
+- Carried over from the closed map "sqlite-migrate design spec": other databases, CLI/GUI tooling, versioned-migration compatibility, writable_schema, row transformation beyond by-name copy (the first consumer asked for a backfill/coerce channel for parity, and confirms no pack uses one today), stage-then-swap as an Apply mode, i18n.

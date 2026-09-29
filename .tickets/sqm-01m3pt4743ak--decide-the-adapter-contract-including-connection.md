@@ -6,12 +6,14 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:59.459011535Z'
-updated: '2026-09-29T14:47:03.206864113Z'
+updated: '2026-09-29T16:39:29.128933131Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
 deps:
 - sqm-01m3pt46xqvr
+links:
+- sqm-01m3q0j698q9
 ---
 
 ## Question

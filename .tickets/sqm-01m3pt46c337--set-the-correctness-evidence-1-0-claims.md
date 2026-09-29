@@ -6,7 +6,7 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:58.691229212Z'
-updated: '2026-09-29T14:46:58.775464267Z'
+updated: '2026-09-29T16:40:20.541140259Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
@@ -27,3 +27,9 @@ Found while charting (test/sqlite_migrate/properties_test.clj and generators):
 - `SQM_TRIALS` is 40 locally, 100 in CI.
 
 Decide the 1.0 trial depth, which gaps must close, and whether a long soak run is part of the release gate.
+
+## Notes
+
+**2026-09-29T16:40:20.541140259Z**
+
+From the first-consumer assessment: the bug "Rebuild drops and recreates every view that reads the table transitively" (a Rebuild fails when a view reads the table through another view) got past the property suite, because the generators never chain views. That ticket's acceptance criteria add chained views to the generators. When deciding which evidence 1.0 claims, ask which other dependency shapes (a trigger on a view, a view over several rebuilt tables) the generators still can't produce.
