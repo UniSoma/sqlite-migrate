@@ -6,7 +6,7 @@ type: task
 priority: 2
 mode: afk
 created: '2026-09-29T14:46:59.069473460Z'
-updated: '2026-09-29T20:07:48.000906838Z'
+updated: '2026-09-29T20:18:21.944341085Z'
 closed: '2026-09-29T20:07:48.000906838Z'
 parent: sqm-01m3pt2fgxp9
 tags:
@@ -14,6 +14,7 @@ tags:
 assignee: jonasrodrigues
 links:
 - sqm-01m3qcf3yz6g
+- sqm-01m3qd29cm2s
 ---
 
 ## Question
@@ -52,3 +53,7 @@ Consistent with the first consumer's 15 Rebuilds in 2.2 s (largest 438K rows, WA
 **2026-09-29T20:07:48.000906838Z**
 
 Rebuild costs seconds per million rows (1M: 1.4 to 6.6 s; 10M: 19 to 111 s). Peak extra disk is 1.0x the table with its indexes in rollback-journal mode and 1.7 to 2.0x in WAL. The file keeps the old table's space until VACUUM. Readers are locked out in rollback-journal mode. declared-snapshot is quadratic (filed as a bug). Findings: docs/research/rebuild-cost.md on research/rebuild-cost.
+
+**2026-09-29T20:18:21.944341085Z**
+
+Correction to surprise 3. The whole-file foreign_key_check is a correctness issue as well as a cost: one orphan row that was in the file before the Apply fails every Plan, even one that touches no related table. Reproduced on 52b7f06. It became the map ticket "Decide what the Frame's foreign-key check does with rows that were orphaned before the Apply" (sqm-01m3qd29cm2s). The findings doc was corrected in commit f1c9f6d on research/rebuild-cost.

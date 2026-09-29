@@ -6,7 +6,7 @@ type: epic
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:02.523849786Z'
-updated: '2026-09-29T20:08:00.786565823Z'
+updated: '2026-09-29T20:18:22.145670409Z'
 tags:
 - wayfinder:map
 ---
@@ -30,7 +30,7 @@ Every decision between today's 0.2.0-SNAPSHOT and a 1.0.0 that can be frozen for
 - [Research: can babashka.sqlite or the sqlite3 CLI honour the Executor's Frame?](sqm-01m3pt45egw5): babashka.sqlite (FFI) fits the whole Executor contract and the unchanged suite passes in bb; the sqlite3 CLI's JSON corrupts values on current LTS CLIs; the core loads unchanged. Recommend babashka.sqlite; risk: experimental driver, host SQLite. Findings: docs/research/babashka-adapter.md on branch research/babashka-adapter.
 - [Assess the first consumer against today's SNAPSHOT](sqm-01m3pt45mm8c): Equivalence and Rebuild data safety held on the real file (no false drift and no missed change across 395 entries; every value kept). The upgrade can't apply because of a view-over-view Rebuild bug. The findings became three bugs outside the map plus the tickets "Decide how a Plan leaves consumer-owned live objects alone" and "Decide whether a Check result reports how many rows violate a Gate". The per-finding dispositions are in the ticket's note.
 - [Decide how a Plan leaves consumer-owned live objects alone](sqm-01m3q0kapxa2): keep Directives (`:keep-table`/`:keep-view`/`:keep-index`/`:keep-trigger`) leave live-only objects in place. The Plan gets a `:kept` slot, kept objects survive Rebuilds and leave with their table, views gain fine-grained trigger entries, and dropping a trigger still needs no intent. ADRs 0023, 0024; ships in 1.0. It surfaced the bug "Rebuild counts a dropped table's triggers as surviving dependents" (sqm-01m3q53h6bq6).
-- [Measure Rebuild cost on a large table](sqm-01m3pt46qx4w): seconds per million rows (1M: 1.4 to 6.6 s; 10M: 19 to 111 s), several times more for a table that declares a UNIQUE clause. Peak extra disk is 1.0x the table with its indexes in rollback-journal mode and 1.7 to 2.0x in WAL. The file keeps the old table's space until VACUUM, and rollback-journal mode locks readers out for the whole Apply. Planning on 200 tables takes under 30 ms per stage, except `declared-snapshot`, which is quadratic (568 ms; 8.8 s at 800 tables). That became the bug "declared-snapshot time grows with the square of the Declaration's size" (sqm-01m3qcf3yz6g). Findings: docs/research/rebuild-cost.md on branch research/rebuild-cost.
+- [Measure Rebuild cost on a large table](sqm-01m3pt46qx4w): seconds per million rows (1M: 1.4 to 6.6 s; 10M: 19 to 111 s), several times more for a table that declares a UNIQUE clause. Peak extra disk is 1.0x the table with its indexes in rollback-journal mode and 1.7 to 2.0x in WAL. The file keeps the old table's space until VACUUM, and rollback-journal mode locks readers out for the whole Apply. Planning on 200 tables takes under 30 ms per stage, except `declared-snapshot`, which is quadratic (568 ms; 8.8 s at 800 tables). That became the bug "declared-snapshot time grows with the square of the Declaration's size" (sqm-01m3qcf3yz6g). The Frame's whole-file `foreign_key_check` fails every Apply over one pre-existing orphan row, which became the ticket "Decide what the Frame's foreign-key check does with rows that were orphaned before the Apply" (sqm-01m3qd29cm2s). Findings: docs/research/rebuild-cost.md on branch research/rebuild-cost.
 
 ## Not yet specified
 

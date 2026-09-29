@@ -6,10 +6,12 @@ type: feature
 priority: 2
 mode: hitl
 created: '2026-09-29T14:46:58.871007203Z'
-updated: '2026-09-29T20:07:47.802920399Z'
+updated: '2026-09-29T20:17:59.164272348Z'
 parent: sqm-01m3pt2fgxp9
 tags:
 - wayfinder:grilling
+links:
+- sqm-01m3qd29cm2s
 ---
 
 ## Question
