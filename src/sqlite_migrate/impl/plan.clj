@@ -64,11 +64,15 @@
 
 ;; The version gates the planner consults. DROP COLUMN arrived in 3.35;
 ;; generated columns in 3.31; STRICT tables in 3.37; the ALTER COLUMN
-;; SET/DROP NOT NULL, ADD CHECK / DROP CONSTRAINT family (and the
-;; relaxed ADD COLUMN forms) in 3.53.
+;; SET/DROP NOT NULL, ADD CHECK / DROP CONSTRAINT family in 3.53. ADD
+;; COLUMN of a NOT NULL column with no default fails on every table
+;; before 3.32 and only on a populated one since; an opaque DEFAULT or
+;; a STORED column fails on a populated table at every version, so it
+;; never goes in place (ADR 0022).
 (def ^:private v-drop-column "3.35.0")
 (def ^:private v-rename-column "3.25.0")
 (def ^:private v-generated "3.31.0")
+(def ^:private v-add-column-empty-check "3.32.0")
 (def ^:private v-strict "3.37.0")
 (def ^:private v-alter-constraint "3.53.0")
 
@@ -198,29 +202,40 @@
   (let [decl-order (mapv (comp x/fold-name :name) (:columns declared-table))]
     (every? added-folds (take-last (count added-folds) decl-order))))
 
-(defn- current-word? [default]
-  (contains? #{"current_time" "current_date" "current_timestamp"}
-    (some-> default x/fold-name)))
+(defn- default-kind
+  "The classification of a column DEFAULT's verbatim spelling that
+  compiles Gates (ADR 0015) and routes added columns (ADR 0022):
+  :null when the column defaults to NULL (no default, or the
+  NULL keyword); :constant for a literal whose value every copied row
+  will share (number, string, blob, TRUE/FALSE); :opaque for any other
+  expression — the planner never understands those (ADR 0015).
+  Parentheses wrapping the whole spelling are Noise (ADR 0021)."
+  [spelling]
+  (let [s (some-> spelling x/unparenthesize)]
+    (cond
+      (or (nil? s) (re-matches #"(?i)NULL" s)) :null
+      (or (re-matches #"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?" s)
+        (re-matches #"(?i)[+-]?0x[0-9A-F]+" s)
+        (re-matches #"'(?:[^']|'')*'" s)
+        (re-matches #"(?i)X'(?:[0-9A-F]{2})*'" s)
+        (re-matches #"(?i)TRUE|FALSE" s)) :constant
+      :else :opaque)))
 
 (defn- route-added-column
+  "The route of an added column: `{:ops [...]}` with one `:add-column`
+  only in a shape SQLite accepts on a populated table, since a Plan
+  cannot see row counts (ADR 0022); otherwise `{:rebuild []}`."
   [capabilities tname entry appendable?]
   (let [col (:declared entry)
-        version-floor (fn [ok? minimum what]
-                        (when-not ok?
-                          (if (supports? capabilities minimum) nil [minimum what])))
-        blocked (or (when (pos? (:pk col)) :pk)
-                  (when-not appendable? :position)
-                  (first
-                    (keep identity
-                      [(version-floor (or (not (:not-null? col)) (some? (:default col)))
-                         v-alter-constraint "adding a NOT NULL column without a default")
-                       (version-floor (not (current-word? (:default col)))
-                         v-alter-constraint "adding a column with a CURRENT_* default")
-                       (version-floor (not= :stored (:storage (:generated col)))
-                         v-alter-constraint "adding a STORED generated column")
-                       (version-floor (nil? (:generated col))
-                         v-generated "adding a generated column")])))]
-    (if blocked
+        dkind (default-kind (:default col))
+        blocked? (or (pos? (:pk col))
+                   (not appendable?)
+                   (= :opaque dkind)
+                   (= :stored (:storage (:generated col)))
+                   (and (:generated col) (not (supports? capabilities v-generated)))
+                   (and (:not-null? col) (= :null dkind)
+                     (not (supports? capabilities v-add-column-empty-check))))]
+    (if blocked?
       {:rebuild []}
       {:ops [(ordered-op [phase-change-tables (x/fold-name tname) sub-add-column "" unpatched-position]
                :add-column (:path entry) #{(:path entry)}
@@ -594,24 +609,6 @@
   (let [f (x/fold-name n)]
     (some #(when (= f (x/fold-name (:name %))) %)
       (:columns declared-table))))
-
-(defn- default-kind
-  "The gate-compilation classification of a column DEFAULT's verbatim
-  spelling: :null when the column defaults to NULL (no default, or the
-  NULL keyword); :constant for a literal whose value every copied row
-  will share (number, string, blob, TRUE/FALSE); :opaque for any other
-  expression — the planner never understands those (ADR 0015).
-  Parentheses wrapping the whole spelling are Noise (ADR 0021)."
-  [spelling]
-  (let [s (some-> spelling x/unparenthesize)]
-    (cond
-      (or (nil? s) (re-matches #"(?i)NULL" s)) :null
-      (or (re-matches #"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?" s)
-        (re-matches #"(?i)[+-]?0x[0-9A-F]+" s)
-        (re-matches #"'(?:[^']|'')*'" s)
-        (re-matches #"(?i)X'(?:[0-9A-F]{2})*'" s)
-        (re-matches #"(?i)TRUE|FALSE" s)) :constant
-      :else :opaque)))
 
 (defn- key-part
   "How a declared key column contributes to a gate over the LIVE

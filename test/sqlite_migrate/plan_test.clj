@@ -98,6 +98,60 @@
       (is (converges? ["CREATE TABLE t (a INTEGER)"]
             ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL DEFAULT 'x', c INT)"])))))
 
+(def ^:private populated-table-rule-rows
+  "Added-column clauses and the Op kind each plans as under target
+  versions 3.31.0, 3.32.0 and 3.53.0 (ADR 0022). `:gate` names the Gate
+  every route carries and Apply fails on a one-row table; nil means
+  no Gate and Apply succeeds."
+  [{:clause "TEXT DEFAULT CURRENT_TIMESTAMP" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "TEXT DEFAULT (CURRENT_TIMESTAMP)" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "INTEGER DEFAULT (random())" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "INTEGER DEFAULT (1 + 2)" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "INTEGER DEFAULT (0)" :kinds [:add-column :add-column :add-column]}
+   {:clause "INTEGER DEFAULT -1" :kinds [:add-column :add-column :add-column]}
+   {:clause "TEXT DEFAULT 'x'" :kinds [:add-column :add-column :add-column]}
+   {:clause "INTEGER NOT NULL" :kinds [:rebuild-table :add-column :add-column] :gate :empty-table}
+   {:clause "INTEGER NOT NULL DEFAULT NULL" :kinds [:rebuild-table :add-column :add-column] :gate :empty-table}
+   {:clause "INTEGER NOT NULL DEFAULT 0" :kinds [:add-column :add-column :add-column]}
+   {:clause "INTEGER NOT NULL DEFAULT (random())" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "INTEGER AS (a+1) STORED" :kinds [:rebuild-table :rebuild-table :rebuild-table]}
+   {:clause "INTEGER AS (a+1) VIRTUAL" :kinds [:add-column :add-column :add-column]}])
+
+(deftest added-column-routes-by-the-populated-table-rule
+  (doseq [{:keys [clause kinds gate]} populated-table-rule-rows
+          :let [live ["CREATE TABLE t (a INTEGER)"]
+                declared [(str "CREATE TABLE t (a INTEGER, b " clause ")")]]]
+    (testing (str "adding b " clause)
+      (testing "plans the Op kind a populated table accepts per target version, every route behind the same Gates"
+        (is (= (map vector kinds (repeat (if gate [gate] [])))
+              (for [v ["3.31.0" "3.32.0" "3.53.0"]
+                    :let [[op] (:ops (plan-of live declared {:capabilities {:sqlite-version v}}))]]
+                [(:kind op) (mapv :code (:gates op))]))))
+      (testing "and its default-capabilities Plan applies to a one-row table unless a Gate forbids it"
+        (with-open [conn (sql-jdbc/in-memory)
+                    pristine (sql-jdbc/in-memory)]
+          (p/execute-batch! conn (conj live "INSERT INTO t (a) VALUES (1)"))
+          (let [live-snap (m/snapshot conn)
+                target (m/declared-snapshot pristine declared)
+                pl (m/plan live-snap target (m/diff live-snap target))
+                ex (thrown-info (m/apply! conn pl))]
+            (if gate
+              (is (= [:gate-failed [gate]]
+                    [(:sqlite-migrate/error (ex-data ex))
+                     (->> (:gates (:check (ex-data ex)))
+                       (filter (comp pos? :violations))
+                       (mapv (comp :code :gate)))]))
+              (do (is (nil? ex) (str "apply! must succeed, threw " (ex-message ex)))
+                (is (not (m/drift? (m/diff (m/snapshot conn) target)))
+                  "the applied Plan must converge the live table on the declared one")))))))))
+
+(deftest opaque-default-column-addition-with-rebuild-off-is-rebuild-disabled
+  (is (= {[:table "t" :column "b"] [[:incapable :rebuild-disabled]]}
+        (refusal-codes
+          (plan-of ["CREATE TABLE t (a INTEGER)"]
+            ["CREATE TABLE t (a INTEGER, b INTEGER DEFAULT (random()))"]
+            {:capabilities {:rebuild? false}})))))
+
 (deftest column-level-constraint-spellings-are-never-silently-dropped
   ;; a column-level UNIQUE or REFERENCES surfaces as its own constraint
   ;; entry, which is rebuild-only and collapses the table — the

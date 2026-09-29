@@ -302,21 +302,40 @@
   "A column for the add-column mutation. Shapes cover the gate corners:
   NOT NULL without a default (:empty-table gate), NOT NULL with one,
   and a UNIQUE key over the new column with a constant default (ADR
-  0015). Opaque-expression defaults on new key columns are the
-  documented bidirectionality exclusion, so they are never generated."
+  0015). They also cover the shapes ADD COLUMN rejects on a populated
+  table, which must rebuild (ADR 0022): a CURRENT_* DEFAULT, bare or
+  parenthesized, another opaque-expression DEFAULT, and a STORED
+  generated column. Opaque DEFAULTs on new key columns are ADR 0015's
+  gate exclusion, so the opaque shapes are never keys."
   [table]
   (gen/let [shape (gen/frequency [[3 (gen/return :plain)]
                                   [1 (gen/return :not-null-no-default)]
                                   [1 (gen/return :not-null-default)]
-                                  [1 (gen/return :unique-const-default)]])
-            t (if (:strict? table) (gen/elements strict-type-keys) gen-type)]
+                                  [1 (gen/return :unique-const-default)]
+                                  [1 (gen/return :current-default)]
+                                  [1 (gen/return :expression-default)]
+                                  [1 (gen/return :stored-generated)]])
+            t (if (:strict? table) (gen/elements strict-type-keys) gen-type)
+            ;; STRICT rejects a copied value its declared type cannot hold
+            current-t (gen/elements [:text :any])
+            current (gen/elements ["CURRENT_TIMESTAMP" "(CURRENT_TIMESTAMP)" "current_date" "(CURRENT_TIME)"])
+            expression-t (gen/elements [:integer :int :any])
+            expression (gen/elements ["(random())" "(1 + 2)"])]
     (gen/return
       [shape
        (case shape
          :plain {:name fresh-column :type t}
          :not-null-no-default {:name fresh-column :type t :not-null? true}
          :not-null-default {:name fresh-column :type t :not-null? true :default (default-for t)}
-         :unique-const-default {:name fresh-column :type t :unique? true :default (default-for t)})])))
+         :unique-const-default {:name fresh-column :type t :unique? true :default (default-for t)}
+         :current-default {:name fresh-column :type current-t :default [:raw current]}
+         :expression-default {:name fresh-column :type expression-t :default [:raw expression]}
+         ;; a Schema value has no generated-column key, so the clause
+         ;; rides the verbatim type string; IS NOT NULL yields 0 or 1,
+         ;; which STRICT INTEGER accepts
+         :stored-generated {:name fresh-column
+                            :type (str "INTEGER GENERATED ALWAYS AS ("
+                                    (qid (:name (first (:columns table)))) " IS NOT NULL) STORED")})])))
 
 (defn- scenario-map
   [live target mutation directives]
@@ -598,6 +617,9 @@
               ;; the gate corners: rows present iff the trial violates
               :unique-const-default (if violate? (max n 2) (min n 1))
               :not-null-no-default (if violate? (max n 1) 0)
+              ;; only a populated table tells a Rebuild from an ADD
+              ;; COLUMN that SQLite rejects (ADR 0022)
+              (:current-default :expression-default :stored-generated) (max n 1)
               n)
             n)
         n (if (and mine? violate? (= :toggle-unique kind) adding?) (max n 1) n)

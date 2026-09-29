@@ -61,7 +61,7 @@ into one table Rebuild.
 The planner has these in-place operations:
 
 - a table rename and a column rename
-- a new column at the end of the table
+- a new column at the end of the table, if its DEFAULT is NULL or a literal value
 - a legal column drop
 - `SET NOT NULL` and `DROP NOT NULL`
 - a new CHECK constraint
@@ -78,6 +78,11 @@ All other changes to a regular table go through a Rebuild. A UNIQUE change and a
 foreign-key change always go through a Rebuild, because SQLite has no `ALTER TABLE`
 form for them.
 
+A new column with any other DEFAULT, such as `CURRENT_TIMESTAMP` or `(random())`,
+always goes through a Rebuild, on every SQLite version. So does a new `STORED`
+generated column. SQLite refuses to add these columns to a table that has rows,
+and a plan cannot see how many rows a table has.
+
 A SQLite version floor has one of two different effects.
 
 An in-place floor changes only the route. Below the floor, the planner still does
@@ -86,9 +91,8 @@ the change, but with a Rebuild. These are the in-place floors:
 - A column rename needs SQLite 3.25 or later.
 - A column drop needs SQLite 3.35 or later.
 - The `NOT NULL` and CHECK alterations need SQLite 3.53 or later.
-- Three relaxed `ADD COLUMN` forms need SQLite 3.53 or later: a `NOT NULL` column
-  with no default, a column with a `CURRENT_*` default, and a `STORED` generated
-  column.
+- A new `NOT NULL` column with no default needs SQLite 3.32 or later. On every
+  version, the table must also be empty, and a Gate checks this.
 
 An object floor stops the change. The planner reports the entry as unhandled,
 because a Rebuild must also create the shape that the target cannot hold. These

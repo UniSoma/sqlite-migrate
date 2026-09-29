@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `DEFAULT 0.01` no longer diff as a `:default` change, and a new key column
   defaulting to `(1)` gates as a constant instead of an opaque expression
   (ADR 0021).
+- Adding a column to a table that has rows no longer plans an `ADD COLUMN` that
+  SQLite rejects at Apply. A column with a `CURRENT_*` DEFAULT, parenthesized or
+  not, any other non-literal DEFAULT, or a `STORED` generated column now goes
+  through a Rebuild at every version, and is unhandled with `:rebuild-disabled`
+  when `:rebuild?` is off. A `NOT NULL` column with no default, or with
+  `DEFAULT NULL`, goes in place from SQLite 3.32 and through a Rebuild below it,
+  behind the same `:empty-table` Gate either way (ADR 0022).
 
 ## [0.1.0] - 2026-08-10
 
