@@ -5,7 +5,8 @@
   (:require [next.jdbc :as jdbc]
     [next.jdbc.result-set :as rs]
     [sqlite-migrate.protocols :as p])
-  (:import (java.sql Connection DriverManager)))
+  (:import (java.sql Connection DriverManager PreparedStatement SQLException)
+    (org.sqlite SQLiteErrorCode SQLiteException)))
 
 (set! *warn-on-reflection* true)
 
@@ -18,6 +19,69 @@
   [^Connection connection ^String sql]
   (with-open [st (.createStatement connection)]
     (.execute st sql)))
+
+(defn- probe
+  "Prepare the first statement of `sql` without stepping it and return
+  `(f prepared-statement)`, or SQLite's message when it rejects the
+  statement. Any other driver failure throws `:sqlite-error` with the
+  driver exception as the cause."
+  [^Connection connection ^String sql f]
+  (try
+    (with-open [ps (.prepareStatement connection sql)]
+      (f ps))
+    (catch SQLException e
+      (if (and (instance? SQLiteException e)
+            (= SQLiteErrorCode/SQLITE_ERROR (.getResultCode ^SQLiteException e)))
+        (.getMessage e)
+        (throw (ex-info "preparing a statement failed"
+                 {:sqlite-migrate/error :sqlite-error}
+                 e))))))
+
+;; sqlite-jdbc hides the prepare tail, so the boundary is found by
+;; probing: after a prefix, this text closes any open `--` or `/*`
+;; comment and adds nothing else, and each marker that follows is a
+;; token SQLite rejects with an error message that names it.
+(def ^:private comment-closer "-- */\n")
+(def ^:private probe-markers ["\u0001" "\u0002"])
+;; A statement with 999 parameters, which no Declaration statement has;
+;; 999 is the lowest ceiling SQLite has shipped for parameter numbers.
+(def ^:private no-statement-probe "SELECT ?999")
+
+(defn- stops-before-marker?
+  "True when SQLite's prepare of `text` stops before reading anything
+  appended after it: the prepare outcome is the same whichever marker
+  follows."
+  [connection text]
+  (apply = (map #(probe connection (str text comment-closer %) (constantly nil))
+             probe-markers)))
+
+(defn- parameter-count
+  [^PreparedStatement ps]
+  (.getParameterCount (.getParameterMetaData ps)))
+
+(defn- holds-no-statement?
+  "True when `sql` is only whitespace, comments and semicolons: SQLite
+  skips all of it and prepares the SELECT appended after it. A literal,
+  quoted identifier or trigger body left open swallows that SELECT."
+  [connection sql]
+  (= 999 (probe connection (str sql comment-closer ";" no-statement-probe)
+           parameter-count)))
+
+(defn- leading-statement
+  "`SQLiteExecutor/first-statement` over sqlite-jdbc. A prefix ending at a
+  `;` is the first statement exactly when SQLite stops before reading
+  what follows it — a semicolon inside a literal, comment or trigger
+  body lets the parse run on into the marker, so the outcome depends
+  on which marker it meets. Without such a `;`, the whole text is the
+  statement unless it holds none."
+  [connection ^String sql]
+  (or (some (fn [end]
+              (let [prefix (subs sql 0 end)]
+                (when (stops-before-marker? connection prefix)
+                  prefix)))
+        (keep-indexed (fn [i c] (when (= \; c) (inc i))) sql))
+    (when-not (holds-no-statement? connection sql)
+      sql)))
 
 (defn- foreign-keys-on?
   [^Connection connection]
@@ -76,6 +140,8 @@
   p/SQLiteExecutor
   (execute-query [_ sql params]
     (query connection sql params))
+  (first-statement [_ sql]
+    (leading-statement connection sql))
   (execute-batch! [_ statements]
     (run-frame! connection statements []))
   (execute-batch! [_ statements gate-sqls]

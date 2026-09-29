@@ -17,8 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under `:directives`. The planner is unchanged: it still receives only
   per-object Directives and no wildcard.
 
+### Changed
+
+- `SQLiteExecutor` gains a third op, `first-statement`: the prefix of a SQL
+  text that SQLite's prepare consumes as its first statement, or nil when the
+  text holds none. This breaks adapters outside this library: each must
+  implement it before `declared-snapshot` works on it (ADR 0025).
+
 ### Fixed
 
+- `declared-snapshot` realizes every statement of a multi-statement Declaration
+  string. It used to realize only the first and ignore the rest without a
+  word, so a Declaration read from a `schema.sql` file produced a Plan that
+  dropped every object after it. SQLite decides where each statement ends, so
+  a semicolon inside a string literal, a comment or a trigger body stays in
+  its statement. Each statement is guarded on its own: DML, ATTACH, PRAGMA and
+  temp objects later in a string are refused with `:malformed-input`, and
+  `:statement-index` counts statements across the whole Declaration.
 - Parentheses wrapping the whole of a column DEFAULT are Noise: `DEFAULT (0.01)`
   and `DEFAULT 0.01` no longer diff as a `:default` change, and a new key column
   defaulting to `(1)` gates as a constant instead of an opaque expression

@@ -224,10 +224,17 @@
 (defn declared-snapshot
   "Realize `declaration` (a SQL statement string or seq of statement
   strings) into the pristine database behind `conn` and introspect it.
-  Guards the pristine premise (throws `:malformed-input` if the
-  database already contains objects) and refuses loudly — with
-  which-statement context — any statement whose effect introspection
-  cannot capture: DML, ATTACH, PRAGMA side effects, temp objects."
+  A string may hold several statements; SQLite's prepare loop finds
+  where each ends (ADR 0002), and every statement is realized and
+  guarded on its own, in order. Guards the pristine premise (throws
+  `:malformed-input` if the database already contains objects) and
+  refuses loudly any statement whose effect introspection cannot
+  capture — DML, ATTACH, PRAGMA side effects, temp objects — with
+  `:malformed-input`, the offending `:statement` text, and its
+  zero-based `:statement-index` counted across every statement of the
+  whole Declaration. A seq element that is not a string throws
+  `:malformed-input` with its `:element-index` before anything is
+  realized."
   [conn declaration]
   (let [before (snapshot conn)
         existing (concat (keys (:tables before)) (keys (:views before)))]
@@ -236,11 +243,26 @@
                         (count existing) " object(s)")
                {:sqlite-migrate/error :malformed-input
                 :existing-objects (vec (sort existing))}))))
-  (let [statements (if (string? declaration) [declaration] (vec declaration))]
-    (doseq [[index statement] (map-indexed vector statements)]
-      (let [fingerprint (current-fingerprint conn)]
-        (p/execute-batch! conn [statement])
-        (guard-invisible-effects! conn statement index fingerprint))))
+  (let [texts (if (string? declaration) [declaration] (vec declaration))]
+    (when-let [bad (first (remove (comp string? texts) (range (count texts))))]
+      (throw (ex-info (str "Declaration element " bad " is not a SQL string")
+               {:sqlite-migrate/error :malformed-input
+                :element-index bad
+                :element (texts bad)})))
+    ;; ADR 0002: SQLite's prepare loop finds each statement, against the
+    ;; schema the statements before it realized, so splitting and
+    ;; realizing interleave.
+    (reduce (fn [index text]
+              (loop [index index
+                     text text]
+                (if-let [statement (p/first-statement conn text)]
+                  (let [fingerprint (current-fingerprint conn)]
+                    (p/execute-batch! conn [statement])
+                    (guard-invisible-effects! conn (str/trim statement) index fingerprint)
+                    (recur (inc index) (subs text (count statement))))
+                  index)))
+      0
+      texts))
   (snapshot conn))
 
 ;; ---------------------------------------------------------------------------

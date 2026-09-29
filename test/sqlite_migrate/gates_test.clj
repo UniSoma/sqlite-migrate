@@ -522,6 +522,8 @@
   (reify p/SQLiteExecutor
     (execute-query [_ sql params]
       (p/execute-query conn sql params))
+    (first-statement [_ sql]
+      (p/first-statement conn sql))
     (execute-batch! [_ statements gate-sqls]
       (p/execute-batch! conn ["CREATE TABLE drifted (x INTEGER)"])
       (p/execute-batch! conn statements gate-sqls))))

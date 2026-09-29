@@ -202,3 +202,74 @@
       (is (= a b))
       (is (not= (:sql (meta (get-in a [:tables "t"])))
             (:sql (meta (get-in b [:tables "t"]))))))))
+
+(deftest a-multi-statement-string-realizes-every-statement
+  (testing "one string of three statements gives an empty Diff against the live schema they build"
+    (let [statements ["CREATE TABLE t (a INTEGER)"
+                      "CREATE VIEW v AS SELECT a FROM t"
+                      "CREATE INDEX t_a ON t(a)"]]
+      (with-open [live (sql-jdbc/in-memory)
+                  pristine (sql-jdbc/in-memory)]
+        (p/execute-batch! live statements)
+        (is (= [] (:entries (m/diff (m/snapshot live)
+                              (m/declared-snapshot pristine
+                                "CREATE TABLE t (a INTEGER); CREATE VIEW v AS SELECT a FROM t; CREATE INDEX t_a ON t(a)")))))))))
+
+(deftest a-statement-later-in-a-string-is-refused-with-its-declaration-index
+  (testing "invisible effects after the first statement of a string are refused, indexed across the whole Declaration"
+    (are [declaration bad-statement bad-index]
+      (let [data (declared-snapshot-error declaration)]
+        (and (= :malformed-input (:sqlite-migrate/error data))
+          (= bad-statement (:statement data))
+          (= bad-index (:statement-index data))))
+      ;; DML
+      "CREATE TABLE t (a); INSERT INTO t VALUES (1)"
+      "INSERT INTO t VALUES (1)" 1
+      ;; ATTACH
+      "CREATE TABLE t (a); ATTACH ':memory:' AS aux1;"
+      "ATTACH ':memory:' AS aux1;" 1
+      ;; PRAGMA side effect
+      "CREATE TABLE t (a);\nPRAGMA user_version = 5;"
+      "PRAGMA user_version = 5;" 1
+      ;; temp objects live outside the main schema
+      "CREATE TABLE t (a); CREATE TEMP TABLE tt (x)"
+      "CREATE TEMP TABLE tt (x)" 1
+      ;; the index counts every statement of every string before it
+      ["CREATE TABLE t (a); CREATE TABLE u (b)" "CREATE TABLE w (c); DELETE FROM t"]
+      "DELETE FROM t" 3)))
+
+(deftest a-semicolon-inside-a-statement-does-not-end-it
+  (testing "a semicolon in a string literal, a comment, or a trigger body stays inside its statement, as SQLite's prepare loop reads it"
+    (with-open [conn (sql-jdbc/in-memory)]
+      (let [snap (m/declared-snapshot conn
+                   (str "CREATE TABLE t (a TEXT DEFAULT ';', b TEXT);\n"
+                     "-- a comment; with a semicolon\n"
+                     "CREATE TABLE u (c /* inline; comment */ TEXT);\n"
+                     "CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN\n"
+                     "  INSERT INTO u VALUES (new.a);\n"
+                     "  DELETE FROM u WHERE c = ';';\n"
+                     "END;\n"
+                     "CREATE INDEX u_c ON u(c);\n"
+                     "-- trailing; comment"))]
+        (is (= #{"t" "u"} (set (keys (:tables snap)))))
+        (is (= "';'" (get-in snap [:tables "t" :columns 0 :default])))
+        (is (= (str "CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN\n"
+                 "  INSERT INTO u VALUES (new.a);\n"
+                 "  DELETE FROM u WHERE c = ';';\n"
+                 "END")
+              (:sql (meta (get-in snap [:tables "t" :triggers "t_ai"])))))
+        (is (contains? (get-in snap [:tables "u" :indexes]) "u_c")
+          "the statement after the trigger is realized too")))))
+
+(deftest an-unclosed-last-statement-is-an-error-not-dropped
+  (testing "a last statement left open by a literal, a quoted identifier or a trigger body fails loudly"
+    (are [declaration]
+      (= :sqlite-error (:sqlite-migrate/error (declared-snapshot-error declaration)))
+      "CREATE TABLE t (a); CREATE TABLE u (b TEXT DEFAULT 'x)"
+      "CREATE TABLE t (a); CREATE TABLE \"u (b)"
+      "CREATE TABLE t (a); CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1")))
+
+(deftest a-declaration-element-that-is-not-a-string-is-refused
+  (let [data (declared-snapshot-error ["CREATE TABLE t (a)" nil])]
+    (is (= :malformed-input (:sqlite-migrate/error data)))
+    (is (= 1 (:element-index data)))))

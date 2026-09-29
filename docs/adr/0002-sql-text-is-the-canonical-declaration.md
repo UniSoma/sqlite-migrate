@@ -1,5 +1,7 @@
 # SQL text is the canonical Declaration; EDN is sugar that compiles to it
 
+> Amended by ADR 0025: the Executor's `first-statement` op exposes the prepare loop that splits multi-statement text.
+
 The canonical target-schema input is SQL text — a single string or a seq of CREATE
 statements — executed into the pristine database and introspected into a Snapshot. An
 EDN Schema value ships as a clearly-separated sugar layer that compiles to SQL text;

@@ -252,8 +252,9 @@ violation counts and sample rows. Presentation only.
 _Avoid_: gate report
 
 **Executor**:
-The two-op effectful contract every runtime adapter implements: a read-only
-query op and an atomic batch-apply op that owns the Frame. Everything
+The three-op effectful contract every runtime adapter implements: a read-only
+query op, an atomic batch-apply op that owns the Frame, and an op that finds
+where SQLite ends the first statement of a SQL text. Everything
 effectful — Introspection, Check, Apply — speaks only to an Executor;
 database creation is deliberately outside the contract.
 _Avoid_: connection, driver, backend

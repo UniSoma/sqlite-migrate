@@ -8,7 +8,7 @@
   this namespace are the normative adapter-author spec.")
 
 (defprotocol SQLiteExecutor
-  "The two-op effectful contract over one open SQLite database.
+  "The three-op effectful contract over one open SQLite database.
 
   Implementations must target the `main` schema of a single database and
   keep one logical connection open for the value's lifetime — introspection
@@ -20,6 +20,21 @@
     sequence, possibly empty) and return the full result set as a vector
     of keyword-keyed row maps (unqualified, lower-case keys). Must not
     mutate the database. Failures throw; the driver exception must ride
+    as the cause.")
+  (first-statement [conn sql]
+    "Return the first statement of the SQL text `sql` as SQLite's own
+    prepare loop finds it: the prefix of `sql` that `sqlite3_prepare_v2`
+    consumes, up to its tail — leading whitespace, comments and empty
+    statements included, the terminating semicolon too when there is
+    one. Returns nil when `sql` holds no statement (only whitespace,
+    comments and semicolons). Where the statement ends is SQLite's
+    decision against the database's current schema, never string
+    manipulation: a semicolon inside a string literal, a quoted
+    identifier, a comment or a trigger body does not end a statement
+    (ADR 0002, 0025). When SQLite rejects the statement, return a non-empty
+    prefix that reaches the point of rejection, so executing it raises
+    SQLite's own error. Prepares without executing; must not mutate the
+    database. Any other failure throws; the driver exception must ride
     as the cause.")
   (execute-batch! [conn statements] [conn statements gate-sqls]
     "Execute the ordered SQL `statements` (a sequence of single-statement
