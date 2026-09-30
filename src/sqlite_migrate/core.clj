@@ -232,7 +232,9 @@
   capture — DML, ATTACH, PRAGMA side effects, temp objects — with
   `:malformed-input`, the offending `:statement` text, and its
   zero-based `:statement-index` counted across every statement of the
-  whole Declaration. A seq element that is not a string throws
+  whole Declaration. A statement SQLite rejects throws `:sqlite-error`
+  with the same `:statement` and `:statement-index`, SQLite's exception
+  as the cause. A seq element that is not a string throws
   `:malformed-input` with its `:element-index` before anything is
   realized."
   [conn declaration]
@@ -256,9 +258,19 @@
               (loop [index index
                      text text]
                 (if-let [statement (p/first-statement conn text)]
-                  (let [fingerprint (current-fingerprint conn)]
-                    (p/execute-batch! conn [statement])
-                    (guard-invisible-effects! conn (str/trim statement) index fingerprint)
+                  (let [fingerprint (current-fingerprint conn)
+                        trimmed (str/trim statement)]
+                    (try
+                      (p/execute-batch! conn [statement])
+                      (catch Exception e
+                        (if (:statement-index (ex-data e))
+                          (throw (ex-info (str "SQLite rejected Declaration statement " index)
+                                   {:sqlite-migrate/error :sqlite-error
+                                    :statement-index index
+                                    :statement trimmed}
+                                   (or (ex-cause e) e)))
+                          (throw e))))
+                    (guard-invisible-effects! conn trimmed index fingerprint)
                     (recur (inc index) (subs text (count statement))))
                   index)))
       0

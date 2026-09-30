@@ -238,6 +238,22 @@
       ["CREATE TABLE t (a); CREATE TABLE u (b)" "CREATE TABLE w (c); DELETE FROM t"]
       "DELETE FROM t" 3)))
 
+(deftest a-statement-sqlite-rejects-carries-its-declaration-index-and-text
+  (testing "a rejected statement throws :sqlite-error naming its index across the whole Declaration, with its trimmed text"
+    (are [declaration bad-statement bad-index]
+      (with-open [conn (sql-jdbc/in-memory)]
+        (let [e (thrown-info (m/declared-snapshot conn declaration))
+              data (ex-data e)]
+          (and (= :sqlite-error (:sqlite-migrate/error data))
+            (= bad-statement (:statement data))
+            (= bad-index (:statement-index data))
+            (= (str "SQLite rejected Declaration statement " bad-index) (ex-message e))
+            (instance? java.sql.SQLException (ex-cause e)))))
+      ["CREATE TABLE a (x)" "CREATE TABLE b (y)" "CREATE TABLE a (z)"]
+      "CREATE TABLE a (z)" 2
+      "CREATE TABLE a (x);\n  CREATE TABLE a (z);\n"
+      "CREATE TABLE a (z);" 1)))
+
 (deftest a-semicolon-inside-a-statement-does-not-end-it
   (testing "a semicolon in a string literal, a comment, or a trigger body stays inside its statement, as SQLite's prepare loop reads it"
     (with-open [conn (sql-jdbc/in-memory)]

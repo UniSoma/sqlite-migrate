@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When SQLite rejects a Declaration statement, `declared-snapshot` throws
+  `:sqlite-error` with the statement's `:statement-index`, counted across the
+  whole Declaration, and its text under `:statement`. SQLite's exception is the
+  cause. It used to report "statement 0 of the batch failed" and
+  `:statement-index 0` wherever the statement sat, without its text.
 - A Plan that changes a view drops each surviving view and trigger that reads
   it, directly or through a chain of views, together with the view. It
   re-creates them from their stored SQL after the tables change. They used to
