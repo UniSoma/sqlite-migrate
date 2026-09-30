@@ -72,8 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:statement-index` counts statements across the whole Declaration.
 - `declared-snapshot` no longer reads every table after each Declaration
   statement to find rows or engine-internal tables. It reads only the tables
-  that statement created, so the work per statement no longer grows with the
-  number of tables. Each statement is refused as before. The one visible
+  that statement created, so the number of queries per statement no longer
+  grows with the number of tables. Each statement is refused as before. The one visible
   difference: the refusal of `ANALYZE` names `sqlite_stat1` under `:table`,
   where it used to name `sqlite_stat4`.
 - Parentheses wrapping the whole of a column DEFAULT are Noise: `DEFAULT (0.01)`
