@@ -141,9 +141,12 @@
               {:name "group" :collate "RTRIM" :desc? false}]
             (get-in order [:indexes "idx_order_expr" :columns]))))))
 
-(defn- declared-snapshot-error [declaration]
+(defn- declared-snapshot-exception [declaration]
   (with-open [conn (sql-jdbc/in-memory)]
-    (ex-data (thrown-info (m/declared-snapshot conn declaration)))))
+    (thrown-info (m/declared-snapshot conn declaration))))
+
+(defn- declared-snapshot-error [declaration]
+  (ex-data (declared-snapshot-exception declaration)))
 
 (deftest declaration-with-invisible-effects-errors-loudly
   (testing "statements introspection cannot capture error with which-statement context"
@@ -241,14 +244,13 @@
 (deftest a-statement-sqlite-rejects-carries-its-declaration-index-and-text
   (testing "a rejected statement throws :sqlite-error naming its index across the whole Declaration, with its trimmed text"
     (are [declaration bad-statement bad-index]
-      (with-open [conn (sql-jdbc/in-memory)]
-        (let [e (thrown-info (m/declared-snapshot conn declaration))
-              data (ex-data e)]
-          (and (= :sqlite-error (:sqlite-migrate/error data))
-            (= bad-statement (:statement data))
-            (= bad-index (:statement-index data))
-            (= (str "SQLite rejected Declaration statement " bad-index) (ex-message e))
-            (instance? java.sql.SQLException (ex-cause e)))))
+      (let [e (declared-snapshot-exception declaration)
+            data (ex-data e)]
+        (and (= :sqlite-error (:sqlite-migrate/error data))
+          (= bad-statement (:statement data))
+          (= bad-index (:statement-index data))
+          (= (str "SQLite rejected Declaration statement " bad-index) (ex-message e))
+          (instance? java.sql.SQLException (ex-cause e))))
       ["CREATE TABLE a (x)" "CREATE TABLE b (y)" "CREATE TABLE a (z)"]
       "CREATE TABLE a (z)" 2
       "CREATE TABLE a (x);\n  CREATE TABLE a (z);\n"

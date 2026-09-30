@@ -1,23 +1,24 @@
 ---
 id: sqm-01m3q0j6cb7m
 title: declared-snapshot reports a failing statement's Declaration index and text
-status: open
+status: closed
 type: bug
 priority: 2
 mode: afk
 created: '2026-09-29T16:39:28.907500697Z'
-updated: '2026-09-30T19:12:36.393445483Z'
+updated: '2026-09-30T19:52:16.536761128Z'
+closed: '2026-09-30T19:52:16.536761128Z'
 acceptance:
 - title: 'A regression deftest: the example above throws :sqlite-error with :statement-index 2 and :statement "CREATE TABLE a (z)", failing before the fix'
-  done: false
+  done: true
 - title: The ex-message names the Declaration index, not a batch index
-  done: false
+  done: true
 - title: bb test passes; clj-kondo --lint src test ci is clean
-  done: false
+  done: true
 - title: A multi-statement string whose second statement SQLite rejects throws :sqlite-error with :statement-index 1 and that statement's trimmed text, trailing `;` included, as the :malformed-input refusals carry it
-  done: false
+  done: true
 - title: CHANGELOG.md carries a Fixed entry for the Declaration index and statement text on a rejected statement
-  done: false
+  done: true
 links:
 - sqm-01m3pt45mm8c
 - sqm-01m3q0hqvwa6
@@ -52,3 +53,9 @@ ADR 0002 promises that "execution errors are surfaced with which-statement conte
 - The Executor protocol docstring, `jdbc_frame_test`, and the style-doc example keep their batch-index wording.
 - The regression tests sit next to the existing which-statement tests in `snapshot_fidelity_test.clj`. The ex-message check needs the exception itself, not the `declared-snapshot-error` helper, which returns only ex-data.
 - `CHANGELOG.md` gets a `### Fixed` entry under `[Unreleased]`.
+
+## Notes
+
+**2026-09-30T19:52:16.536761128Z**
+
+declared-snapshot now catches an execute-batch! failure that carries :statement-index and throws :sqlite-error with the Declaration-wide :statement-index and the trimmed :statement, SQLite's exception as the cause; ex-message 'SQLite rejected Declaration statement N'. Failures without :statement-index pass through. Docstring and CHANGELOG Fixed entry updated; regression deftest covers list and multi-statement string forms.
