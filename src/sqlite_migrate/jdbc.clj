@@ -11,9 +11,17 @@
 (set! *warn-on-reflection* true)
 
 (defn- query
+  "Run `sql` with `params` and return its rows as unqualified lower-case
+  maps. A driver failure throws `:sqlite-error` with the driver
+  exception as the cause."
   [^Connection connection sql params]
-  (jdbc/execute! connection (into [sql] params)
-    {:builder-fn rs/as-unqualified-lower-maps}))
+  (try
+    (jdbc/execute! connection (into [sql] params)
+      {:builder-fn rs/as-unqualified-lower-maps})
+    (catch SQLException e
+      (throw (ex-info "the query failed"
+               {:sqlite-migrate/error :sqlite-error}
+               e)))))
 
 (defn- raw-exec!
   [^Connection connection ^String sql]

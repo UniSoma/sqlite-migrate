@@ -83,3 +83,9 @@
     (is (nil? (p/execute-batch! conn ["CREATE TABLE t (a INTEGER)"] [])))
     (is (= ["t"] (keys (:tables (m/snapshot conn))))
       "an empty gate list behaves exactly like the two-argument arity")))
+
+(deftest a-query-sqlite-rejects-is-a-sqlite-error-with-the-driver-exception-as-cause
+  (with-open [conn (sql-jdbc/in-memory)]
+    (let [ex (thrown-info (p/execute-query conn "SELECT * FROM nope" []))]
+      (is (= :sqlite-error (:sqlite-migrate/error (ex-data ex))))
+      (is (instance? org.sqlite.SQLiteException (ex-cause ex))))))

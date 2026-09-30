@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `snapshot` throws `:sqlite-error` naming the view under `:view` when SQLite
+  cannot resolve a view, such as one that reads a missing column or a dropped
+  table. SQLite's exception is the cause. `declared-snapshot` throws the same
+  error for such a view in a Declaration. Both used to let SQLite's raw
+  exception escape without a `:sqlite-migrate/error` key. A Declaration may
+  still create a view before the table it reads. The JDBC Executor's
+  `execute-query` also wraps a driver failure in `:sqlite-error` with the
+  driver exception as the cause, as the `SQLiteExecutor` contract requires.
 - When SQLite rejects a Declaration statement, `declared-snapshot` throws
   `:sqlite-error` with the statement's `:statement-index`, counted across the
   whole Declaration, and its text under `:statement`. SQLite's exception is the

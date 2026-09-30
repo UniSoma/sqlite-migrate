@@ -291,3 +291,29 @@
   (let [data (declared-snapshot-error ["CREATE TABLE t (a)" nil])]
     (is (= :malformed-input (:sqlite-migrate/error data)))
     (is (= 1 (:element-index data)))))
+
+(defn- snapshot-exception [statements]
+  (with-open [conn (sql-jdbc/in-memory)]
+    (p/execute-batch! conn statements)
+    (thrown-info (m/snapshot conn))))
+
+(deftest a-view-sqlite-cannot-resolve-is-a-sqlite-error-naming-the-view
+  (testing "snapshot of a view reading a missing column, or a table dropped under it, throws :sqlite-error with :view and SQLite's exception as the cause"
+    (are [statements]
+      (let [e (snapshot-exception statements)]
+        (and (= {:sqlite-migrate/error :sqlite-error :view "v"} (ex-data e))
+          (instance? org.sqlite.SQLiteException (ex-cause e))))
+      ["CREATE TABLE a (x)" "CREATE VIEW v AS SELECT nope FROM a"]
+      ["CREATE TABLE a (x)" "CREATE VIEW v AS SELECT x FROM a" "DROP TABLE a"])))
+
+(deftest a-declaration-holding-a-view-sqlite-cannot-resolve-is-a-sqlite-error-naming-the-view
+  (let [e (declared-snapshot-exception ["CREATE TABLE a (x)" "CREATE VIEW v AS SELECT nope FROM a"])]
+    (is (= {:sqlite-migrate/error :sqlite-error :view "v"} (ex-data e))
+      "the error names the view, not a Declaration statement")
+    (is (instance? org.sqlite.SQLiteException (ex-cause e)))))
+
+(deftest a-declaration-may-create-a-view-before-the-table-it-reads
+  (with-open [conn (sql-jdbc/in-memory)]
+    (is (= ["x"] (get-in (m/declared-snapshot conn ["CREATE VIEW v AS SELECT x FROM a"
+                                                    "CREATE TABLE a (x)"])
+                   [:views "v" :columns])))))

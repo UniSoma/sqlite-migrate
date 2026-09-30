@@ -143,6 +143,20 @@
         (seq pk-cols) (assoc :primary-key {:name (:pk-name facts) :columns pk-cols}))
       {:sql sql})))
 
+(defn- view-columns
+  "Output column names of view `view-name`. SQLite accepts a view it
+  cannot resolve and fails only when something reads it, so a failure
+  here throws `:sqlite-error` naming the view (ADR 0012)."
+  [conn view-name]
+  (try
+    (mapv :name (q conn "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid" view-name))
+    (catch Exception e
+      (throw (ex-info (str "SQLite cannot resolve view " view-name)
+               {:sqlite-migrate/error :sqlite-error
+                :view view-name}
+               ;; an outside adapter may throw the bare driver exception
+               (or (ex-cause e) e))))))
+
 (defn snapshot
   "Introspect the live `main` schema of `conn` into a Snapshot: tables
   (with columns, indexes, and triggers nested), views (with their
@@ -152,7 +166,10 @@
   Snapshot equality: each object map carries its stored CREATE sql
   verbatim as Clojure metadata (`{:sql ...}` via `clojure.core/meta`),
   and the Snapshot map itself carries `{:sqlite-version ...
-  :schema-version ...}` the same way."
+  :schema-version ...}` the same way. A view SQLite cannot resolve — one
+  reading a missing table, column, function or view — throws
+  `:sqlite-error` with the first such view, in name order, under `:view`
+  and SQLite's exception as the cause."
   [conn]
   (let [tlist (q conn (str "SELECT name, type, wr, strict FROM pragma_table_list"
                         " WHERE schema = 'main'"
@@ -182,7 +199,7 @@
                       :when (= "view" type)]
                   [name (with-meta
                           {:name name
-                           :columns (mapv :name (q conn "SELECT name FROM pragma_table_xinfo(?) ORDER BY cid" name))
+                           :columns (view-columns conn name)
                            :triggers (triggers-on name)}
                           {:sql (stored-sql "view" name)})]))}
       {:sqlite-version (-> (q conn "SELECT sqlite_version() AS v") first :v)
