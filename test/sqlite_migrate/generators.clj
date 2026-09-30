@@ -635,14 +635,21 @@
     " (" (str/join ", " (map (comp qid :name) (:columns table))) ")"
     " VALUES (" (str/join ", " literals) ")"))
 
+(defn- generated-column?
+  "True when `c`'s verbatim type string carries a GENERATED clause, the
+  only place a Schema value can hold one."
+  [c]
+  (some-> (:type c) id-str str/lower-case (str/includes? "generated")))
+
 (defn probe-insert-sql
-  "An INSERT for `table` that omits its AUTOINCREMENT pk and fills every
-  other column with row-`i` literals (FK children stay NULL) — the
-  AUTOINCREMENT-continuity property's post-Apply probe. A table whose
-  only column is that pk leaves nothing to name, so the INSERT takes
-  SQLite's `DEFAULT VALUES` form instead of an empty column list."
+  "An INSERT for `table` that omits its AUTOINCREMENT pk and its
+  generated columns, which SQLite refuses to take a value for, and fills
+  every other column with row-`i` literals (FK children stay NULL) — the
+  AUTOINCREMENT-continuity property's post-Apply probe. A table left
+  with nothing to name takes SQLite's `DEFAULT VALUES` form instead of
+  an empty column list."
   [table i]
-  (let [cols (vec (remove :autoincrement? (:columns table)))
+  (let [cols (vec (remove #(or (:autoincrement? %) (generated-column? %)) (:columns table)))
         fk (fk-col-names table)]
     (str "INSERT INTO " (qid (:name table))
       (if (empty? cols)

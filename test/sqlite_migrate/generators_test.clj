@@ -37,3 +37,28 @@
         (p/execute-batch! conn [(g/probe-insert-sql table 3)])
         (is (= [{:idpk 1 :label "v3" :n 4}]
               (p/execute-query conn "SELECT idpk, label, n FROM t" [])))))))
+
+(deftest probe-insert-sql-omits-generated-columns
+  (let [table {:name "a"
+               :columns [{:name "idpk" :type :integer
+                          :primary-key? true :autoincrement? true}
+                         {:name "a" :type :int}
+                         {:name "s" :type "INTEGER GENERATED ALWAYS AS (\"idpk\" IS NOT NULL) STORED"}
+                         {:name "v" :type "integer generated always as (\"a\" + 1) virtual"}]}]
+    (testing "STORED and VIRTUAL generated columns drop out beside the AUTOINCREMENT pk"
+      (is (= "INSERT INTO \"a\" (\"a\") VALUES (1001)" (g/probe-insert-sql table 1000))))
+    (testing "SQLite accepts the emitted probe"
+      (with-open [conn (sql-jdbc/in-memory)]
+        (p/execute-batch! conn [(str "CREATE TABLE \"a\" (\"idpk\" INTEGER PRIMARY KEY AUTOINCREMENT, \"a\" INT,"
+                                  " \"s\" INTEGER GENERATED ALWAYS AS (\"idpk\" IS NOT NULL) STORED,"
+                                  " \"v\" integer generated always as (\"a\" + 1) virtual)")])
+        (p/execute-batch! conn [(g/probe-insert-sql table 1000)])
+        (is (= [{:idpk 1 :a 1001 :s 1 :v 1002}]
+              (p/execute-query conn "SELECT idpk, a, s, v FROM a" [])))))))
+
+(deftest probe-insert-sql-emits-default-values-when-only-generated-columns-survive
+  (let [table {:name "a"
+               :columns [{:name "idpk" :type :integer
+                          :primary-key? true :autoincrement? true}
+                         {:name "s" :type "INTEGER GENERATED ALWAYS AS (\"idpk\" IS NOT NULL) STORED"}]}]
+    (is (= "INSERT INTO \"a\" DEFAULT VALUES" (g/probe-insert-sql table 1000)))))
