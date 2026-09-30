@@ -1,6 +1,7 @@
 (ns sqlite-migrate.jdbc-frame-test
   "The executor-owned Frame contract of `execute-batch!` on the JDBC
-  adapter, observed through the public surfaces only."
+  adapter, and the `:sqlite-error` its `execute-query` throws, observed
+  through the public surfaces only."
   (:require [clojure.test :refer [deftest is]]
     [sqlite-migrate.core :as m]
     [sqlite-migrate.jdbc :as sql-jdbc]

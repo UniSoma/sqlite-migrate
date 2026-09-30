@@ -253,7 +253,10 @@
   with the same `:statement` and `:statement-index`, SQLite's exception
   as the cause. A seq element that is not a string throws
   `:malformed-input` with its `:element-index` before anything is
-  realized."
+  realized. A view SQLite cannot resolve once every statement is
+  realized throws `:sqlite-error` as `snapshot` does, the view under
+  `:view`, with no `:statement-index`: a view may read a table a later
+  statement creates."
   [conn declaration]
   (let [before (snapshot conn)
         existing (concat (keys (:tables before)) (keys (:views before)))]
