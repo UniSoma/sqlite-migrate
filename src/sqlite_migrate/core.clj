@@ -205,16 +205,27 @@
       {:sqlite-version (-> (q conn "SELECT sqlite_version() AS v") first :v)
        :schema-version (current-fingerprint conn)})))
 
+(defn- top-schema-rowid
+  "The largest rowid in `main.sqlite_schema`, 0 when it is empty."
+  [conn]
+  (-> (q conn "SELECT coalesce(max(rowid), 0) AS top FROM main.sqlite_schema")
+    first
+    :top))
+
 (defn- guard-invisible-effects!
   "Throw `:malformed-input` with which-statement context when executing
   `statement` did anything a Snapshot cannot capture. Three loud
   checks: every Declaration statement must change the main schema (DML,
   ATTACH, PRAGMA side effects, and temp objects bump nothing); no
-  engine-internal table other than `sqlite_sequence` may exist
+  engine-internal table other than `sqlite_sequence` may appear
   (ANALYZE creates `sqlite_stat*`, which the Snapshot excludes); and no
   table — engine-internal ones included — may hold rows afterwards
-  (`CREATE TABLE ... AS SELECT` smuggles data past the first check)."
-  [conn statement index before-fingerprint]
+  (`CREATE TABLE ... AS SELECT` smuggles data past the first check).
+  The last two look only at the tables the statement created, those
+  above `before-top-rowid` in `sqlite_schema`: the Declaration starts
+  pristine and every earlier statement passed this guard, so only a
+  table the statement created can hold rows."
+  [conn statement index before-fingerprint before-top-rowid]
   (let [bail! (fn [msg extra]
                 (throw (ex-info msg (merge {:sqlite-migrate/error :malformed-input
                                             :statement statement
@@ -224,9 +235,16 @@
       (bail! (str "Declaration statement " index " has no effect on the main"
                " schema — a Snapshot cannot capture what it does")
         {}))
-    (let [tables (q conn (str "SELECT name FROM pragma_table_list"
-                           " WHERE schema = 'main' AND type = 'table'"
-                           " AND name <> 'sqlite_schema'"))]
+    ;; SQLite gives a new sqlite_schema row one more than the largest
+    ;; rowid (sqlite.org/autoinc.html), so the window holds exactly the
+    ;; statement's new objects at a cost independent of the table count.
+    ;; pragma_table_list tells shadow and virtual tables apart.
+    (let [tables (q conn (str "SELECT s.name FROM main.sqlite_schema AS s"
+                           " JOIN pragma_table_list(s.name) AS l"
+                           " ON l.schema = 'main' AND l.type = 'table'"
+                           " WHERE s.rowid > ? AND s.type = 'table'"
+                           " ORDER BY s.rowid")
+                   before-top-rowid)]
       (doseq [{:keys [name]} tables]
         (when (and (str/starts-with? name "sqlite_")
                 (not= "sqlite_sequence" name))
@@ -279,6 +297,7 @@
                      text text]
                 (if-let [statement (p/first-statement conn text)]
                   (let [fingerprint (current-fingerprint conn)
+                        top-rowid (top-schema-rowid conn)
                         trimmed (str/trim statement)]
                     (try
                       (p/execute-batch! conn [statement])
@@ -290,7 +309,7 @@
                                     :statement trimmed}
                                    (or (ex-cause e) e)))
                           (throw e))))
-                    (guard-invisible-effects! conn trimmed index fingerprint)
+                    (guard-invisible-effects! conn trimmed index fingerprint top-rowid)
                     (recur (inc index) (subs text (count statement))))
                   index)))
       0

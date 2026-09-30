@@ -173,10 +173,50 @@
       ;; ANALYZE creates/writes engine-internal sqlite_stat* tables the
       ;; Snapshot excludes
       ["CREATE TABLE t (x INT)" "ANALYZE"]
-      "ANALYZE" 1))
+      "ANALYZE" 1
+      ;; the DROP frees the largest sqlite_schema rowid before CTAS reuses it
+      ["CREATE TABLE t (x INT)" "DROP TABLE t" "CREATE TABLE t2 AS SELECT 1 AS x"]
+      "CREATE TABLE t2 AS SELECT 1 AS x" 2))
+  (testing "a refusal over a table names the table the statement created"
+    (are [declaration table]
+      (= table (:table (declared-snapshot-error declaration)))
+      ["CREATE TABLE t (x INT)" "CREATE TABLE t2 AS SELECT 1 AS x"] "t2"
+      ["CREATE TABLE t (x INT)" "ANALYZE"] "sqlite_stat1"))
   (testing "a pure-DDL declaration still passes"
     (with-open [conn (sql-jdbc/in-memory)]
       (is (map? (m/declared-snapshot conn corpus/nasty-declaration))))))
+
+(defn- counting-executor
+  "An executor that delegates everything to `conn` and appends, to the
+  vector in `gaps`, how many queries ran since the previous
+  `execute-batch!` call."
+  [conn gaps]
+  (let [queries (atom 0)]
+    (reify p/SQLiteExecutor
+      (execute-query [_ sql params]
+        (swap! queries inc)
+        (p/execute-query conn sql params))
+      (first-statement [_ sql]
+        (p/first-statement conn sql))
+      (execute-batch! [_ statements]
+        (swap! gaps conj (first (reset-vals! queries 0)))
+        (p/execute-batch! conn statements)))))
+
+(defn- queries-between-statements
+  "The distinct counts of queries `declared-snapshot` runs between two
+  consecutive realized statements of a Declaration of `n` tables."
+  [n]
+  (with-open [conn (sql-jdbc/in-memory)]
+    (let [gaps (atom [])]
+      (m/declared-snapshot (counting-executor conn gaps)
+        (mapv #(str "CREATE TABLE t" % " (a INTEGER)") (range n)))
+      (set (rest @gaps)))))
+
+(deftest declared-snapshot-guards-each-statement-in-queries-independent-of-the-table-count
+  (let [ten (queries-between-statements 10)]
+    (is (= 1 (count ten)) "every statement costs the same number of queries")
+    (is (= ten (queries-between-statements 40))
+      "a 40-table Declaration costs what a 10-table one does per statement")))
 
 (deftest provenance-rides-in-clojure-meta-without-changing-snapshot-equality
   ;; Same schema reached through different histories: the Snapshot values

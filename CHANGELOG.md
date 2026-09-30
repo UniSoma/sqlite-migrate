@@ -70,6 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its statement. Each statement is guarded on its own: DML, ATTACH, PRAGMA and
   temp objects later in a string are refused with `:malformed-input`, and
   `:statement-index` counts statements across the whole Declaration.
+- `declared-snapshot` no longer reads every table after each Declaration
+  statement to find rows or engine-internal tables. It reads only the tables
+  that statement created, so the work per statement no longer grows with the
+  number of tables. Each statement is refused as before. The one visible
+  difference: the refusal of `ANALYZE` names `sqlite_stat1` under `:table`,
+  where it used to name `sqlite_stat4`.
 - Parentheses wrapping the whole of a column DEFAULT are Noise: `DEFAULT (0.01)`
   and `DEFAULT 0.01` no longer diff as a `:default` change, and a new key column
   defaulting to `(1)` gates as a constant instead of an opaque expression
