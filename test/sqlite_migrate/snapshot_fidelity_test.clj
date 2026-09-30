@@ -189,7 +189,9 @@
 (defn- counting-executor
   "An executor that delegates everything to `conn` and appends, to the
   vector in `gaps`, how many queries ran since the previous
-  `execute-batch!` call."
+  `execute-batch!` call. It implements the two-argument arity alone, so
+  a `declared-snapshot` that reached for the gate-sqls arity would fail
+  loudly."
   [conn gaps]
   (let [queries (atom 0)]
     (reify p/SQLiteExecutor
@@ -213,9 +215,9 @@
       (set (rest @gaps)))))
 
 (deftest declared-snapshot-guards-each-statement-in-queries-independent-of-the-table-count
-  (let [ten (queries-between-statements 10)]
-    (is (= 1 (count ten)) "every statement costs the same number of queries")
-    (is (= ten (queries-between-statements 40))
+  (let [counts-at-ten (queries-between-statements 10)]
+    (is (= 1 (count counts-at-ten)) "every statement costs the same number of queries")
+    (is (= counts-at-ten (queries-between-statements 40))
       "a 40-table Declaration costs what a 10-table one does per statement")))
 
 (deftest provenance-rides-in-clojure-meta-without-changing-snapshot-equality
