@@ -1,29 +1,30 @@
 ---
 id: sqm-01m3svq9hfvf
 title: snapshot throws :sqlite-error naming a view SQLite cannot resolve
-status: open
+status: closed
 type: bug
 priority: 2
 mode: afk
 created: '2026-09-30T19:12:36.393445483Z'
-updated: '2026-09-30T19:25:33.354930098Z'
+updated: '2026-09-30T20:30:50.681798241Z'
+closed: '2026-09-30T20:30:50.681798241Z'
 links:
 - sqm-01m3q0j6cb7m
 tags:
 - settled
 acceptance:
 - title: snapshot of a live database whose view reads a missing column, and of one whose view reads a dropped table, throws :sqlite-error with :view "v" and the SQLiteException as the cause
-  done: false
+  done: true
 - title: declared-snapshot of a Declaration holding an unresolvable view throws the same error
-  done: false
+  done: true
 - title: A Declaration that creates a view before the table it reads still realizes
-  done: false
+  done: true
 - title: (p/execute-query conn "SELECT * FROM nope" []) on the JDBC Executor throws :sqlite-error with the SQLiteException as the cause
-  done: false
+  done: true
 - title: CHANGELOG.md carries a Fixed entry for these errors
-  done: false
+  done: true
 - title: bb test passes; clj-kondo --lint src test ci is clean
-  done: false
+  done: true
 ---
 
 ## Description
@@ -53,3 +54,9 @@ The JDBC Executor's `execute-query` wraps a driver failure in `:sqlite-error` wi
 - The `SQLiteExecutor` protocol docstring stays as it is: requiring `:sqlite-error` there would force outside adapters to change.
 - `CHANGELOG.md` gets one `### Fixed` entry under `[Unreleased]` covering the view error and the adapter wrap.
 - Tests go in `snapshot_fidelity_test.clj`, plus `jdbc_frame_test.clj` for the adapter wrap.
+
+## Notes
+
+**2026-09-30T20:30:50.681798241Z**
+
+snapshot throws :sqlite-error with :view and SQLite's exception as the cause when a view cannot be resolved (missing column, dropped table); declared-snapshot inherits it from its final snapshot, and a view created before its table still realizes. The JDBC adapter's query path wraps driver failures in :sqlite-error, covering execute-query, the Frame's gate queries, and its PRAGMA reads. CHANGELOG Fixed entry added.
