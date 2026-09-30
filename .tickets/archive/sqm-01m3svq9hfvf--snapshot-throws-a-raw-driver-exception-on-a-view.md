@@ -6,10 +6,11 @@ type: bug
 priority: 2
 mode: afk
 created: '2026-09-30T19:12:36.393445483Z'
-updated: '2026-09-30T20:30:50.681798241Z'
+updated: '2026-09-30T21:07:33.421420941Z'
 closed: '2026-09-30T20:30:50.681798241Z'
 links:
 - sqm-01m3q0j6cb7m
+- sqm-01m3t29ryd15
 tags:
 - settled
 acceptance:
