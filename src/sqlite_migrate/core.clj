@@ -429,13 +429,11 @@
   fast-fail; Apply's authoritative check rides the Frame's gate step
   (ADR 0016). Surviving this is also what lets `drift-probe-sql`
   interpolate the plan's fingerprint: past here it equals a fingerprint
-  SQLite itself just reported, so it is an integer. `cause`, when
-  given, rides the refusal as its cause."
-  ([conn plan] (verify-fingerprint! conn plan nil))
-  ([conn plan cause]
-    (let [live-fingerprint (current-fingerprint conn)]
-      (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
-        (drift-refused! plan live-fingerprint cause)))))
+  SQLite itself just reported, so it is an integer."
+  [conn plan]
+  (let [live-fingerprint (current-fingerprint conn)]
+    (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
+      (drift-refused! plan live-fingerprint))))
 
 (defn- plan-gates
   "Every Gate of `plan` in op order, each paired with its op's plan
@@ -484,14 +482,19 @@
   when `conn`'s fingerprint, re-read outside any transaction, has moved
   off `plan`'s, throw `:drift-refused` with that `:sqlite-error` as the
   cause instead — the Gate likely failed on an object the drift
-  removed."
+  removed. A re-read that fails leaves the `:sqlite-error` standing."
   [conn plan [op-index gate] e]
   (let [error (ex-info (str "gate " (:code gate) " of op " op-index " failed")
                 {:sqlite-migrate/error :sqlite-error
                  :gate gate
                  :op-index op-index}
-                (or (ex-cause e) e))]
-    (verify-fingerprint! conn plan error)
+                (or (ex-cause e) e))
+        ;; the SQLITE_BUSY or IO error that failed the Gate may fail
+        ;; this read too, and must not displace the Gate's attribution
+        live-fingerprint (try (current-fingerprint conn) (catch Exception _ nil))]
+    (when (and (some? live-fingerprint)
+            (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint))
+      (drift-refused! plan live-fingerprint error))
     (throw error)))
 
 (defn- run-gates

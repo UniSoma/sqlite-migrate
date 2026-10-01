@@ -536,6 +536,29 @@
       (is (not-any? #(contains? data %) [:gate :op-index])
         "the drift probe is not a Gate of the Plan"))))
 
+(deftest a-failing-fingerprint-re-read-keeps-the-gate-named
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
+    ;; Once a Gate has failed, the fingerprint read fails too, as it would
+    ;; while the SQLITE_BUSY or IO error that failed the Gate persists.
+    (let [gate-failed? (atom false)
+          rejecting (fn [f] (try (f) (catch Exception e (reset! gate-failed? true) (throw e))))
+          executor (reify p/SQLiteExecutor
+                     (execute-query [_ sql params]
+                       (if (and @gate-failed? (str/includes? sql "schema_version"))
+                         (p/execute-query live "SELECT * FROM nope" [])
+                         (rejecting #(p/execute-query live sql params))))
+                     (first-statement [_ sql]
+                       (p/first-statement live sql))
+                     (execute-batch! [_ statements gate-sqls]
+                       (rejecting #(p/execute-batch! live statements gate-sqls))))
+          pl (rejected-gate-plan live)]
+      (doseq [[label edge] [["check" m/check] ["apply!" m/apply!]]]
+        (reset! gate-failed? false)
+        (testing (str label " throws the Gate's error, not the re-read's")
+          (is (= {:sqlite-migrate/error :sqlite-error :gate rejected-gate :op-index 1}
+                (ex-data (thrown-info (edge executor pl))))))))))
+
 (defn- drift-refusal
   "Plan `t`'s NOT NULL tightening on a fresh database, then run `edge`
   — `m/check` or `m/apply!` — over an executor that drops `t` past the
