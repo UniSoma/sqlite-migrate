@@ -56,9 +56,17 @@
         (is (= [{:idpk 1 :a 1001 :s 1 :v 1002}]
               (p/execute-query conn "SELECT idpk, a, s, v FROM a" [])))))))
 
-(deftest probe-insert-sql-emits-default-values-when-only-generated-columns-survive
+(deftest probe-insert-sql-emits-default-values-when-only-the-pk-is-left-after-the-skip
   (let [table {:name "a"
                :columns [{:name "idpk" :type :integer
                           :primary-key? true :autoincrement? true}
                          {:name "s" :type "INTEGER GENERATED ALWAYS AS (\"idpk\" IS NOT NULL) STORED"}]}]
-    (is (= "INSERT INTO \"a\" DEFAULT VALUES" (g/probe-insert-sql table 1000)))))
+    (testing "skipping the generated column leaves nothing to name"
+      (is (= "INSERT INTO \"a\" DEFAULT VALUES" (g/probe-insert-sql table 1000))))
+    (testing "SQLite accepts the emitted probe"
+      (with-open [conn (sql-jdbc/in-memory)]
+        (p/execute-batch! conn [(str "CREATE TABLE \"a\" (\"idpk\" INTEGER PRIMARY KEY AUTOINCREMENT,"
+                                  " \"s\" INTEGER GENERATED ALWAYS AS (\"idpk\" IS NOT NULL) STORED)")])
+        (p/execute-batch! conn [(g/probe-insert-sql table 1000)])
+        (is (= [{:idpk 1 :s 1}]
+              (p/execute-query conn "SELECT idpk, s FROM a" [])))))))

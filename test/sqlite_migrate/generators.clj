@@ -636,8 +636,8 @@
     " VALUES (" (str/join ", " literals) ")"))
 
 (defn- generated-column?
-  "True when `c`'s verbatim type string carries a GENERATED clause, the
-  only place a Schema value can hold one."
+  "True when `c`'s verbatim type string carries the GENERATED keyword,
+  the only place a Schema value can hold a generated-column clause."
   [c]
   (some-> (:type c) id-str str/lower-case (str/includes? "generated")))
 
