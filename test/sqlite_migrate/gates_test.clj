@@ -396,6 +396,11 @@
           declared (m/declared-snapshot pristine declared-decl)]
       (m/plan live-snap declared (m/diff live-snap declared)))))
 
+(defn- live-fingerprint
+  "`live`'s current `schema_version` fingerprint."
+  [live]
+  (-> (p/execute-query live "PRAGMA main.schema_version" []) first :schema_version))
+
 (deftest check-reports-pass-and-fail-per-gate
   (with-open [live (sql-jdbc/in-memory)]
     (p/execute-batch! live
@@ -444,8 +449,7 @@
       ;; that violate. Reading `:more?` off the running constant would
       ;; call this a clean count of 3.
       (let [foreign-limit 3
-            pl {:live-provenance {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
-                                                    first :schema_version)}
+            pl {:live-provenance {:schema-version (live-fingerprint live)}
                 :declared-provenance {}
                 :ops [{:kind :set-not-null
                        :gates [{:code :not-null
@@ -486,8 +490,7 @@
                  :explanation "column b of table t becomes NOT NULL"
                  :sql "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT 10"
                  :limit 10}]
-    {:live-provenance {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
-                                         first :schema_version)}
+    {:live-provenance {:schema-version (live-fingerprint live)}
      :declared-provenance {}
      :ops [{:kind :set-not-null :sql ["CREATE TABLE made (x INTEGER)"] :gates [passing]}
            {:kind :set-not-null :sql [] :gates [passing rejected-gate]}]}))
@@ -520,15 +523,15 @@
     (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
     ;; The drift probe is core's own SQL, so only a swapped-in query can
     ;; make SQLite reject it.
-    (let [rejecting-probe (reify p/SQLiteExecutor
-                            (execute-query [_ sql params]
-                              (p/execute-query live sql params))
-                            (first-statement [_ sql]
-                              (p/first-statement live sql))
-                            (execute-batch! [_ statements gate-sqls]
-                              (p/execute-batch! live statements
-                                (assoc gate-sqls 0 "SELECT * FROM nope"))))
-          data (ex-data (thrown-info (m/apply! rejecting-probe (rejected-gate-plan live))))]
+    (let [probe-rejecting-executor (reify p/SQLiteExecutor
+                                     (execute-query [_ sql params]
+                                       (p/execute-query live sql params))
+                                     (first-statement [_ sql]
+                                       (p/first-statement live sql))
+                                     (execute-batch! [_ statements gate-sqls]
+                                       (p/execute-batch! live statements
+                                         (assoc gate-sqls 0 "SELECT * FROM nope"))))
+          data (ex-data (thrown-info (m/apply! probe-rejecting-executor (rejected-gate-plan live))))]
       (is (= :sqlite-error (:sqlite-migrate/error data)))
       (is (not-any? #(contains? data %) [:gate :op-index])
         "the drift probe is not a Gate of the Plan"))))

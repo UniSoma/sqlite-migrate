@@ -429,11 +429,13 @@
   fast-fail; Apply's authoritative check rides the Frame's gate step
   (ADR 0016). Surviving this is also what lets `drift-probe-sql`
   interpolate the plan's fingerprint: past here it equals a fingerprint
-  SQLite itself just reported, so it is an integer."
-  [conn plan]
-  (let [live-fingerprint (current-fingerprint conn)]
-    (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
-      (drift-refused! plan live-fingerprint))))
+  SQLite itself just reported, so it is an integer. `cause`, when
+  given, rides the refusal as its cause."
+  ([conn plan] (verify-fingerprint! conn plan nil))
+  ([conn plan cause]
+    (let [live-fingerprint (current-fingerprint conn)]
+      (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
+        (drift-refused! plan live-fingerprint cause)))))
 
 (defn- plan-gates
   "Every Gate of `plan` in op order, each paired with its op's plan
@@ -488,10 +490,8 @@
                 {:sqlite-migrate/error :sqlite-error
                  :gate gate
                  :op-index op-index}
-                (or (ex-cause e) e))
-        live-fingerprint (current-fingerprint conn)]
-    (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
-      (drift-refused! plan live-fingerprint error))
+                (or (ex-cause e) e))]
+    (verify-fingerprint! conn plan error)
     (throw error)))
 
 (defn- run-gates
@@ -631,13 +631,16 @@
         (catch Exception e
           (let [data (ex-data e)
                 located (when-let [i (:statement-index data)]
-                          (op-at-batch-index (:ops plan) i))]
+                          (op-at-batch-index (:ops plan) i))
+                failed-gate (when-let [i (:gate-index data)]
+                              (when (pos? i)
+                                (nth gates (dec i))))]
             (cond
               (= :gates-violated (:sqlite-migrate/error data))
               (gates-violated! plan gates (:gate-results data) e)
 
-              (some-> (:gate-index data) pos?)
-              (gate-errored! conn plan (nth gates (dec (:gate-index data))) e)
+              failed-gate
+              (gate-errored! conn plan failed-gate e)
 
               located
               (let [[op-index op statement] located]
