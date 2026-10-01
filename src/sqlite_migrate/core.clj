@@ -473,13 +473,40 @@
                   gates rows-per-gate)]
     {:pass? (every? :pass? results) :gates results}))
 
+(defn- gate-errored!
+  "Throw `:sqlite-error` attributing a failure to run `gate`, the Gate
+  at its op's plan index `op-index`: the Gate verbatim under `:gate`
+  beside `:op-index`, as a Check result entry carries them. `e` is the
+  executor's exception; the driver exception under it rides as the
+  cause, as on the statement path. Drift takes precedence (ADR 0018):
+  when `conn`'s fingerprint, re-read outside any transaction, has moved
+  off `plan`'s, throw `:drift-refused` with that `:sqlite-error` as the
+  cause instead — the Gate likely failed on an object the drift
+  removed."
+  [conn plan [op-index gate] e]
+  (let [error (ex-info (str "gate " (:code gate) " of op " op-index " failed")
+                {:sqlite-migrate/error :sqlite-error
+                 :gate gate
+                 :op-index op-index}
+                (or (ex-cause e) e))
+        live-fingerprint (current-fingerprint conn)]
+    (when (not= (get-in plan [:live-provenance :schema-version]) live-fingerprint)
+      (drift-refused! plan live-fingerprint error))
+    (throw error)))
+
 (defn- run-gates
   "Run every Gate of `plan` verbatim over `conn`'s query path and
   return the Check result — one entry per Gate in op order (see
   `gate-result`)."
   [conn plan]
   (let [gates (plan-gates plan)]
-    (check-result gates (mapv #(p/execute-query conn (:sql (second %)) []) gates))))
+    (check-result gates
+      (mapv (fn [[_ gate :as entry]]
+              (try
+                (p/execute-query conn (:sql gate) [])
+                (catch Exception e
+                  (gate-errored! conn plan entry e))))
+        gates))))
 
 (defn check
   "Run every Gate of `plan` read-only against `conn` and return the
@@ -494,8 +521,12 @@
   source Snapshot provenance — advisory means read-only, not
   never-throws, and Gates compiled against a dead schema cannot answer
   about the live one (ADR 0018); the refusal takes precedence over any
-  Gate result. Never mutates the database; SQLite's own enforcement
-  remains the backstop."
+  Gate result. A Gate SQLite fails to run throws `:sqlite-error`
+  carrying that Gate verbatim under `:gate` and its op's plan index
+  under `:op-index`, SQLite's exception as the cause — or, when the
+  fingerprint moved meanwhile, `:drift-refused` with that error as the
+  cause. Never mutates the database; SQLite's own enforcement remains
+  the backstop."
   [conn plan]
   (verify-fingerprint! conn plan)
   (run-gates conn plan))
@@ -571,11 +602,16 @@
   the Check result verbatim under `:check`. `:check-gates? false` opts
   out of the Gates (ADR 0011) — for the operator who just ran `check`
   and wants to skip a second full scan; the drift refusal stands
-  either way. A mid-apply SQLite failure throws
-  `:sqlite-error` carrying the failing Op verbatim, its plan index
-  (`:op-index`), and the specific SQL statement that failed. Returns a
-  minimal Apply report — the Check result rides it under `:check`,
-  absent when gate-checking was skipped; throws on every non-success."
+  either way. A Gate SQLite fails to run rolls back and throws the
+  same `:sqlite-error` `check` throws for it — the Gate under `:gate`,
+  its op's `:op-index`, no `:op` — or `:drift-refused` when the
+  fingerprint moved meanwhile; a failure of the drift probe itself
+  throws `:sqlite-error` with neither key. A mid-apply SQLite failure
+  throws `:sqlite-error` carrying the failing Op verbatim, its plan
+  index (`:op-index`), and the specific SQL statement that failed.
+  Returns a minimal Apply report — the Check result rides it under
+  `:check`, absent when gate-checking was skipped; throws on every
+  non-success."
   ([conn plan] (apply! conn plan {}))
   ([conn plan opts]
     (when (and (seq (:unhandled plan)) (not (:allow-unhandled? opts)))
@@ -599,6 +635,9 @@
             (cond
               (= :gates-violated (:sqlite-migrate/error data))
               (gates-violated! plan gates (:gate-results data) e)
+
+              (some-> (:gate-index data) pos?)
+              (gate-errored! conn plan (nth gates (dec (:gate-index data))) e)
 
               located
               (let [[op-index op statement] located]

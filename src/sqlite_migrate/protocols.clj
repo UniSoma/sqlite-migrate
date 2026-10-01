@@ -69,6 +69,9 @@
     exception's ex-data must carry the failing statement's zero-based
     index in `statements` under `:statement-index`, with the driver
     exception as the cause — callers attribute the failure back to the
-    plan Op that contributed the statement. A step-4 or step-6 failure
-    carries no `:statement-index`. Returns nil — success is silence,
-    failure throws."))
+    plan Op that contributed the statement. When a gate query in step 4
+    fails, the thrown exception's ex-data must carry the failing entry's
+    zero-based index in `gate-sqls` under `:gate-index`, with the driver
+    exception as the cause — callers attribute the failure back to the
+    gate that contributed the SQL. A step-6 failure carries neither key.
+    Returns nil — success is silence, failure throws."))

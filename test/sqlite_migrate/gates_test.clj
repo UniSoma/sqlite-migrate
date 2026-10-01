@@ -469,6 +469,102 @@
           "check refuses rather than returning: Gates compiled against a dead schema cannot answer about the live one (ADR 0018)")
         (is (= :drift-refused (:sqlite-migrate/error (ex-data ex))))))))
 
+(def ^:private rejected-gate
+  "A Gate whose SQL SQLite rejects: it reads a table that does not exist."
+  {:code :not-null
+   :path [:table "nope" :column "b"]
+   :explanation "column b of table nope becomes NOT NULL"
+   :sql "SELECT * FROM \"nope\" WHERE \"b\" IS NULL LIMIT 10"
+   :limit 10})
+
+(defn- rejected-gate-plan
+  "A Plan over `live`'s current fingerprint whose op 1 carries
+  `rejected-gate` after a passing Gate; op 0's Gate passes too."
+  [live]
+  (let [passing {:code :not-null
+                 :path [:table "t" :column "b"]
+                 :explanation "column b of table t becomes NOT NULL"
+                 :sql "SELECT * FROM \"t\" WHERE \"b\" IS NULL LIMIT 10"
+                 :limit 10}]
+    {:live-provenance {:schema-version (-> (p/execute-query live "PRAGMA main.schema_version" [])
+                                         first :schema_version)}
+     :declared-provenance {}
+     :ops [{:kind :set-not-null :sql ["CREATE TABLE made (x INTEGER)"] :gates [passing]}
+           {:kind :set-not-null :sql [] :gates [passing rejected-gate]}]}))
+
+(deftest check-names-the-gate-sqlite-rejects
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
+    (let [ex (thrown-info (m/check live (rejected-gate-plan live)))]
+      (is (= {:sqlite-migrate/error :sqlite-error :gate rejected-gate :op-index 1}
+            (ex-data ex))
+        "the Gate rides verbatim beside its op's plan index, as in a Check result entry")
+      (is (instance? org.sqlite.SQLiteException (ex-cause ex))
+        "SQLite's own exception rides as the cause"))))
+
+(deftest apply-names-the-gate-sqlite-rejects-as-check-does
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
+    (let [pl (rejected-gate-plan live)
+          before (m/snapshot live)
+          checked (thrown-info (m/check live pl))
+          applied (thrown-info (m/apply! live pl))]
+      (is (= (ex-data checked) (ex-data applied))
+        "both edges attribute the same Gate the same way")
+      (is (instance? org.sqlite.SQLiteException (ex-cause applied))
+        "SQLite's own exception rides as the cause, unwrapped from the executor's")
+      (is (= before (m/snapshot live)) "nothing was applied"))))
+
+(deftest a-failing-drift-probe-names-no-gate
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
+    ;; The drift probe is core's own SQL, so only a swapped-in query can
+    ;; make SQLite reject it.
+    (let [rejecting-probe (reify p/SQLiteExecutor
+                            (execute-query [_ sql params]
+                              (p/execute-query live sql params))
+                            (first-statement [_ sql]
+                              (p/first-statement live sql))
+                            (execute-batch! [_ statements gate-sqls]
+                              (p/execute-batch! live statements
+                                (assoc gate-sqls 0 "SELECT * FROM nope"))))
+          data (ex-data (thrown-info (m/apply! rejecting-probe (rejected-gate-plan live))))]
+      (is (= :sqlite-error (:sqlite-migrate/error data)))
+      (is (not-any? #(contains? data %) [:gate :op-index])
+        "the drift probe is not a Gate of the Plan"))))
+
+(defn- drift-refusal
+  "Plan `t`'s NOT NULL tightening on a fresh database, then run `edge`
+  — `m/check` or `m/apply!` — over an executor that drops `t` past the
+  fingerprint fast-fail: `check` as it reaches the Gate, `apply!`
+  before its Frame. Returns what `edge` throws."
+  [edge]
+  (with-open [live (sql-jdbc/in-memory)]
+    (p/execute-batch! live ["CREATE TABLE t (a INTEGER, b TEXT)"])
+    (let [pl (live-plan live ["CREATE TABLE t (a INTEGER, b TEXT NOT NULL)"])
+          gate-sql (-> pl :ops first :gates first :sql)
+          drop-t! #(p/execute-batch! live ["DROP TABLE t"])
+          drifting (reify p/SQLiteExecutor
+                     (execute-query [_ sql params]
+                       (when (= gate-sql sql) (drop-t!))
+                       (p/execute-query live sql params))
+                     (first-statement [_ sql]
+                       (p/first-statement live sql))
+                     (execute-batch! [_ statements gate-sqls]
+                       (drop-t!)
+                       (p/execute-batch! live statements gate-sqls)))]
+      (thrown-info (edge drifting pl)))))
+
+(deftest a-gate-failing-on-drift-refuses-the-drift-at-both-edges
+  (doseq [[label edge] [["check" m/check] ["apply!" m/apply!]]]
+    (testing (str label " refuses the drift rather than naming a Gate that read a dropped table")
+      (let [ex (drift-refusal edge)
+            cause (ex-data (ex-cause ex))]
+        (is (= :drift-refused (:sqlite-migrate/error (ex-data ex))))
+        (is (= [:sqlite-error :not-null 0]
+              [(:sqlite-migrate/error cause) (:code (:gate cause)) (:op-index cause)])
+          "the Gate's failure rides as the cause")))))
+
 ;; ---------------------------------------------------------------------------
 ;; apply! gate-checks by default — up-front once the Frame's transaction
 ;; is open, rolling back with the Check result on failure (ADR 0008, 0011)

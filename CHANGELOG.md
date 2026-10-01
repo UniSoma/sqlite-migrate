@@ -23,9 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text that SQLite's prepare consumes as its first statement, or nil when the
   text holds none. This breaks adapters outside this library: each must
   implement it before `declared-snapshot` works on it (ADR 0025).
+- `execute-batch!` must name a failing gate query: when one of `gate-sqls`
+  fails in the Frame's gate step, the ex-data carries that entry's zero-based
+  index under `:gate-index`, with the driver exception as the cause. This
+  breaks adapters outside this library: without it, `apply!` cannot say which
+  Gate failed.
 
 ### Fixed
 
+- When SQLite fails to run one of a Plan's Gates, `check` and `apply!` throw
+  `:sqlite-error` naming it: the Gate under `:gate` and its op's plan index
+  under `:op-index`, with SQLite's exception as the cause. Both throw the same
+  ex-data for the same Gate. They used to report only "the query failed".
+  When the live schema moved after the fingerprint check, so that the Gate
+  read an object that is gone, both throw `:drift-refused` instead, with the
+  Gate's error as the cause.
 - `snapshot` throws `:sqlite-error` naming the view under `:view` when SQLite
   cannot resolve a view, such as one that reads a missing column or a dropped
   table. SQLite's exception is the cause. `declared-snapshot` throws the same

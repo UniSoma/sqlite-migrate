@@ -99,9 +99,20 @@
   "Frame step 4: run every one of `gate-sqls` inside the open
   transaction — all of them, never fail-fast — and throw
   `:gates-violated` with the index-aligned results when any returned
-  rows."
+  rows. A gate query that fails throws `:sqlite-error` naming its index
+  in `gate-sqls` under `:gate-index`, the driver exception as the cause."
   [^Connection connection gate-sqls]
-  (let [results (mapv #(vec (query connection % [])) gate-sqls)]
+  (let [results (into []
+                  (map-indexed
+                    (fn [i sql]
+                      (try
+                        (vec (query connection sql []))
+                        (catch Exception e
+                          (throw (ex-info (str "gate query " i " failed")
+                                   {:sqlite-migrate/error :sqlite-error
+                                    :gate-index i}
+                                   (or (ex-cause e) e)))))))
+                  gate-sqls)]
     (when (some seq results)
       (throw (ex-info (str (count (filter seq results)) " of " (count results)
                         " gate queries returned rows")

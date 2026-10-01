@@ -91,12 +91,12 @@
       (is (= :sqlite-error (:sqlite-migrate/error (ex-data ex))))
       (is (instance? org.sqlite.SQLiteException (ex-cause ex))))))
 
-(deftest a-gate-query-sqlite-rejects-is-a-sqlite-error-without-a-statement-index
+(deftest a-gate-query-sqlite-rejects-is-a-sqlite-error-naming-its-gate-index
   (with-open [conn (sql-jdbc/in-memory)]
     (let [ex (thrown-info (p/execute-batch! conn ["CREATE TABLE made (x INTEGER)"]
-                            ["SELECT * FROM nope"]))]
-      (is (= {:sqlite-migrate/error :sqlite-error} (ex-data ex))
-        "a gate failure names no statement: it runs before any statement")
+                            ["SELECT 1 WHERE 0" "SELECT * FROM nope" "SELECT 1 WHERE 0"]))]
+      (is (= {:sqlite-migrate/error :sqlite-error :gate-index 1} (ex-data ex))
+        "a gate failure names its gate-sqls entry and no statement: it runs before any statement")
       (is (instance? org.sqlite.SQLiteException (ex-cause ex))))
     (is (empty? (:tables (m/snapshot conn)))
       "a rejected gate query rolls the batch back")))
