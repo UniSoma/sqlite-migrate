@@ -44,6 +44,7 @@
   to the live Snapshot's) plus `:rebuild?` (default true). A nil target
   version means \"latest\": every version gate passes."
   (:require [clojure.string :as str]
+    [sqlite-migrate.impl.dependents :as dep]
     [sqlite-migrate.impl.diff :as d]
     [sqlite-migrate.impl.lexical :as lex]
     [sqlite-migrate.impl.util :as u]))
@@ -459,85 +460,6 @@
        " FROM sqlite_sequence AS s WHERE s.name = " live
        " AND NOT EXISTS (SELECT 1 FROM sqlite_sequence AS s2 WHERE s2.name = " temp ")")]))
 
-(defn- dependent-view-folds
-  "The folded names of the `views` that lexically mention one of the
-  `seeds` folds, or a view already in the set."
-  [views seeds]
-  (loop [closure #{} frontier seeds]
-    (if (empty? frontier)
-      closure
-      (let [added (into #{}
-                    (keep (fn [{:keys [name sql]}]
-                            (let [f (u/fold-name name)]
-                              (when (and (not (contains? closure f))
-                                      (some #(lex/mentions? sql %) frontier))
-                                f))))
-                    views)]
-        (recur (into closure added) added)))))
-
-(defn- reachable
-  "The folds reachable from `f` along `reads` edges."
-  [reads f]
-  (loop [seen #{} todo (vec (reads f))]
-    (if-let [g (peek todo)]
-      (if (contains? seen g)
-        (recur seen (pop todo))
-        (recur (conj seen g) (into (pop todo) (reads g))))
-      seen)))
-
-(defn- dependency-order
-  "`views` ordered so each follows the views among them it lexically
-  mentions, ties by folded name. The members of a cycle — only a
-  conservative false mention can close one — take name order among
-  themselves."
-  [views]
-  (let [by-fold (into (sorted-map) (map (juxt (comp u/fold-name :name) identity)) views)
-        reads (into {}
-                (for [[f v] by-fold]
-                  [f (into #{}
-                       (filter #(and (not= f %) (lex/mentions? (:sql v) %)))
-                       (keys by-fold))]))
-        reach (into {} (map (juxt identity #(reachable reads %))) (keys by-fold))
-        cycle-of (fn [f] (into (sorted-set f) (filter #(contains? (reach %) f)) (reach f)))]
-    (loop [placed [] pending (into (sorted-set) (keys by-fold))]
-      (if (empty? pending)
-        placed
-        (let [members (some (fn [f]
-                              (let [group (cycle-of f)]
-                                (when (not-any? #(and (pending %) (not (group %)))
-                                        (mapcat reads group))
-                                  group)))
-                        pending)]
-          (recur (into placed (map by-fold) members) (reduce disj pending members)))))))
-
-(defn- rebuild-dependents
-  "The surviving views and triggers that lexically read one of the
-  `seeds` — folded names of tables or views that go missing while the
-  survivors stand. SQLite reparses every view and trigger during ALTER
-  TABLE RENAME, so such a survivor would fail the rename. Returns
-  `{:views [...] :triggers [...]}` — every view that reads a seed
-  directly or through another such view, in dependency order and with
-  its surviving triggers, plus the triggers of other parents that
-  reference a seed or one of those views, each carrying its parent
-  under `:table` or `:view`. A seed's own triggers are left to the
-  caller."
-  [{:keys [views table-triggers]} seeds]
-  (let [dep-view-folds (dependent-view-folds views seeds)
-        referenced (into dep-view-folds seeds)
-        references? (fn [sql] (some #(lex/mentions? sql %) referenced))
-        loose-view-triggers (for [v views
-                                  :when (not (contains? dep-view-folds (u/fold-name (:name v))))
-                                  trg (:triggers v)
-                                  :when (references? (:sql trg))]
-                              (assoc trg :view (:name v)))
-        loose-table-triggers (for [trg table-triggers
-                                   :when (and (not (contains? seeds (u/fold-name (:table trg))))
-                                           (references? (:sql trg)))]
-                               trg)]
-    {:views (dependency-order
-              (filterv #(contains? dep-view-folds (u/fold-name (:name %))) views))
-     :triggers (vec (concat loose-view-triggers loose-table-triggers))}))
-
 (defn- rebuild-stage-sqls
   "The rebuild's staging statements: create the declared shape under
   `temp`, INSERT...SELECT copy, and — when both sides autoincrement —
@@ -561,12 +483,6 @@
     (conj (str "ALTER TABLE " (u/quote-identifier temp)
             " RENAME TO " (u/quote-identifier (:name declared-table))))))
 
-(defn- reads-missing-view?
-  "True when `sql` mentions a view missing between phases 1 and 5 — a
-  changed view or one of its readers (ADR 0026)."
-  [{:keys [missing-view-folds]} sql]
-  (boolean (some #(lex/mentions? sql %) missing-view-folds)))
-
 (defn- rebuild-recreate-sqls
   "The rebuild's recreate statements: the declared table's indexes and
   triggers, then the dropped dependent views in dependency order (each
@@ -579,7 +495,7 @@
             (:sql (meta idx))))
     (into (for [[_ trg] (sort-by key (:triggers declared-table))
                 :let [sql (:sql (meta trg))]
-                :when (not (reads-missing-view? planning-context sql))]
+                :when (not (dep/reads-missing-view? (:readers planning-context) sql))]
             sql))
     (into (mapcat (fn [v] (cons (:sql v) (map :sql (:triggers v)))))
       (:views deps))
@@ -597,7 +513,7 @@
   [planning-context tname serves {:keys [declared-table] :as pairing}]
   (let [tfold (u/fold-name tname)
         temp (temp-rebuild-name planning-context (:name declared-table))
-        deps (rebuild-dependents (:surviving-dependents planning-context) #{tfold})
+        deps (dep/rebuild-dependents (:surviving-dependents planning-context) #{tfold})
         sql (-> (rebuild-stage-sqls temp pairing)
               (into (rebuild-swap-sqls temp pairing deps))
               (into (rebuild-recreate-sqls planning-context declared-table deps)))]
@@ -612,15 +528,14 @@
   leaves out. Readers are skipped: the reader pass moves them. Each Op
   serves the changed-view entries its trigger reaches plus
   `own-serves` of its name — the entries it realizes itself."
-  [{:keys [reader-trigger-folds reader-serves] :as planning-context}
-   {:keys [live-table declared-table]} own-serves]
+  [{:keys [readers]} {:keys [live-table declared-table]} own-serves]
   (let [moved (fn [table]
                 (for [[nm trg] (sort-by key (:triggers table))
                       :let [sql (:sql (meta trg))]
-                      :when (and (reads-missing-view? planning-context sql)
-                              (not (contains? reader-trigger-folds (u/fold-name nm))))]
+                      :when (and (dep/reads-missing-view? readers sql)
+                              (not (dep/reader-trigger? readers nm)))]
                   [[:table (:name table) :trigger nm]
-                   (into (reader-serves sql) (own-serves nm))
+                   (into (dep/reader-serves readers sql) (own-serves nm))
                    (u/fold-name (:name table))
                    nm
                    sql]))]
@@ -1230,116 +1145,18 @@
               o))
       routed-ops)))
 
-(defn- surviving-dependents
-  "The live views and triggers that survive the plan's phase-1 and
-  phase-2 drops — the objects a drop-column must stay legal against
-  and a rebuild's rename must not orphan. `:views` carries each
-  surviving view with its surviving triggers; `:table-triggers` each
-  surviving trigger of a table parent — names and stored CREATE sql. A
-  :changed object's recreate lands only in phase 5, so a dropped view
-  excludes its triggers too, and so does a table removed under a
-  :drop-table Directive in `claims`: its triggers nest in its
-  whole-value entry and leave with it in phase 2 (ADR 0023). The
-  readers of a changed view are still among them (ADR 0026)."
-  [live-snapshot claims entries]
-  (let [dropped? (fn [e] (contains? #{:removed :changed} (:kind e)))
-        whole-folds (fn [object pred]
-                      (into #{}
-                        (comp (filter #(and (= object (first (:path %)))
-                                         (= 2 (count (:path %)))
-                                         (pred %)))
-                          (map (comp u/fold-name second :path)))
-                        entries))
-        dropped-tables (into #{} (filter (:drop-tables claims))
-                         (whole-folds :table #(= :removed (:kind %))))
-        dropped-views (whole-folds :view dropped?)
-        dropped-triggers (into #{}
-                           (comp (filter #(and (= :trigger (nth (:path %) 2 nil))
-                                            (dropped? %)))
-                             (map (comp u/fold-name peek :path)))
-                           entries)
-        surviving-triggers (fn [obj]
-                             (vec (for [[nm trg] (sort-by key (:triggers obj))
-                                        :when (not (contains? dropped-triggers (u/fold-name nm)))]
-                                    {:name nm :sql (:sql (meta trg))})))]
-    {:views (vec (for [[nm v] (sort-by key (:views live-snapshot))
-                       :when (not (contains? dropped-views (u/fold-name nm)))]
-                   {:name nm :sql (:sql (meta v)) :triggers (surviving-triggers v)}))
-     :table-triggers (vec (for [[tn t] (sort-by key (:tables live-snapshot))
-                                :when (not (contains? dropped-tables (u/fold-name tn)))
-                                trg (surviving-triggers t)]
-                            (assoc trg :table tn)))}))
-
-(defn- surviving-referencer-sqls
-  "The stored CREATE sql of every surviving dependent — the flat text
-  view the drop-column legality check reads."
-  [{:keys [views table-triggers]}]
-  (into []
-    (remove nil?)
-    (concat
-      (map :sql table-triggers)
-      (map :sql views)
-      (mapcat #(map :sql (:triggers %)) views))))
-
-;; ---------------------------------------------------------------------------
-;; Readers of a changed view (ADR 0026): phase 1 drops them with the
-;; view and phase 5 creates them again, so no view or trigger reads a
-;; missing view while phase 3 runs
-
-(defn- changed-view-paths
-  "The Diff path of each :changed view entry, keyed by folded view
-  name."
-  [entries]
-  (into {}
-    (keep (fn [{:keys [kind path]}]
-            (when (and (= :view (first path)) (= 2 (count path)) (= :changed kind))
-              [(u/fold-name (second path)) path])))
-    entries))
-
-(defn- name-folds
-  "The folded `:name` of each object in `objects`, as a set."
-  [objects]
-  (into #{} (map (comp u/fold-name :name)) objects))
-
-(defn- without-readers
-  "`survivors` less the reader views and reader triggers in `readers` —
-  those leave in phase 1, so neither a Rebuild nor drop-column legality
-  counts them."
-  [survivors readers]
-  (let [view-folds (name-folds (:views readers))
-        trigger-folds (name-folds (:triggers readers))
-        keep-triggers (fn [trgs] (filterv #(not (contains? trigger-folds (u/fold-name (:name %)))) trgs))]
-    {:views (into []
-              (comp (remove #(contains? view-folds (u/fold-name (:name %))))
-                (map #(update % :triggers keep-triggers)))
-              (:views survivors))
-     :table-triggers (keep-triggers (:table-triggers survivors))}))
-
-(defn- reader-serves-fn
-  "A fn from an object's stored sql to the paths of the changed views it
-  reaches: those it mentions, and those the reader views it mentions
-  reach in turn."
-  [reader-views changed-paths]
-  (let [sql-by-fold (into {} (map (juxt (comp u/fold-name :name) :sql)) reader-views)
-        candidates (concat (keys changed-paths) (keys sql-by-fold))
-        mentioned (fn [sql] (into #{} (filter #(lex/mentions? sql %)) candidates))
-        reads (into {} (map (fn [[f sql]] [f (disj (mentioned sql) f)])) sql-by-fold)]
-    (fn [sql]
-      (let [direct (mentioned sql)]
-        (into #{} (keep changed-paths) (into direct (mapcat #(reachable reads %)) direct))))))
-
 (defn- reader-ops
   "The Ops moving every reader out of the way (ADR 0026): per reader
   view a phase-1 :drop-view, a phase-5 :create-view and a :create-trigger
   per trigger it carries; per other reader trigger a :drop-trigger and a
   :create-trigger. Each creates again from live stored sql and serves
   the changed-view entries its reader reaches."
-  [{:keys [readers reader-serves]}]
+  [{:keys [readers]}]
   (-> []
     (into (mapcat (fn [{:keys [name sql triggers]}]
                     (let [vfold (u/fold-name name)
                           path [:view name]
-                          serves (reader-serves sql)]
+                          serves (dep/reader-serves readers sql)]
                       (into [(drop-secondary-op 2 :drop-view path serves vfold)
                              (create-secondary-op 1 :create-view path serves vfold name sql)]
                         (for [trg triggers]
@@ -1349,7 +1166,7 @@
     (into (mapcat (fn [{:keys [name sql table view]}]
                     (let [path (if table [:table table :trigger name] [:view view :trigger name])
                           pfold (u/fold-name (second path))
-                          serves (reader-serves sql)]
+                          serves (dep/reader-serves readers sql)]
                       [(drop-secondary-op 0 :drop-trigger path serves pfold)
                        (create-secondary-op 2 :create-trigger path serves pfold name sql)])))
       (:triggers readers))))
@@ -2030,31 +1847,14 @@
     fused))
 
 (defn- planning-context-for
-  "The planning context every table planner threads: both Snapshots,
-  what the phase-1 and phase-2 drops leave standing (ADR 0006), and the
-  readers of the changed views that phase 1 drops with them (ADR 0026)
-  — `:readers` as `rebuild-dependents` returns them,
-  `:reader-trigger-folds` the triggers among them,
-  `:missing-view-folds` the changed and reader views, and
-  `:reader-serves` the changed-view paths an object's sql reaches. The
-  triggers of a table a `fused` pair renames are no readers: the Diff
-  pairs each with the renamed table as a changed trigger, and the
-  fused plan drops and creates it."
+  "The planning context every table planner threads: both Snapshots
+  and what `sqlite-migrate.impl.dependents/planning-dependents` finds
+  standing — the survivors of the phase-1 and phase-2 drops (ADR 0006)
+  and the readers of the changed views (ADR 0026)."
   [live declared claims entries fused]
-  (let [survivors (surviving-dependents live claims entries)
-        changed-paths (changed-view-paths entries)
-        renamed (into #{} (map (comp u/fold-name second :path :removed)) fused)
-        readers (update (rebuild-dependents survivors (set (keys changed-paths))) :triggers
-                  (fn [trgs] (filterv #(not (some-> (:table %) u/fold-name renamed)) trgs)))
-        dependents (without-readers survivors readers)]
-    {:live-snapshot live
-     :declared-snapshot declared
-     :surviving-dependents dependents
-     :surviving-sqls (surviving-referencer-sqls dependents)
-     :readers readers
-     :reader-trigger-folds (name-folds (:triggers readers))
-     :missing-view-folds (into (set (keys changed-paths)) (name-folds (:views readers)))
-     :reader-serves (reader-serves-fn (:views readers) changed-paths)}))
+  (merge {:live-snapshot live
+          :declared-snapshot declared}
+    (dep/planning-dependents live claims entries fused)))
 
 (defn- plan-entry-group
   "Plan one group of Diff entries — the view planner for a view group,
