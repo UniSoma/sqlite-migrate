@@ -572,17 +572,38 @@
   (str "SELECT * FROM pragma_schema_version WHERE schema_version <> "
     (get-in plan [:live-provenance :schema-version])))
 
+;; The Frame's gate list: the drift probe first, then the Plan's Gates
+;; in `plan-gates` order. Only the three fns below know that layout —
+;; the executor reports a gate by its index in this list.
+
+(defn- frame-gate-sqls
+  "The `gate-sqls` Apply hands the Frame for `plan` and its `gates`."
+  [plan gates]
+  (into [(drift-probe-sql plan)] (map (comp :sql second)) gates))
+
+(defn- frame-gate
+  "The `[op-index gate]` entry of `gates` the Frame ran at index `i` of
+  its gate list, nil when `i` is the drift probe."
+  [gates i]
+  (when (pos? i)
+    (nth gates (dec i))))
+
+(defn- frame-gate-results
+  "`gate-results`, index-aligned with the Frame's gate list, split into
+  the drift probe's rows and the rows per Plan Gate."
+  [gate-results]
+  [(first gate-results) (rest gate-results)])
+
 (defn- gates-violated!
   "Translate the executor's `:gates-violated` payload into the public
-  refusal. `gate-results` is index-aligned with the `gate-sqls` Apply
-  passed: index 0 is the drift probe, whose rows mean `:drift-refused`
-  and take precedence — gate SQL compiled against a dead schema answers
-  about a database that no longer exists. Otherwise the remaining
-  indexes zip back onto `gates` as the same Check result a manual
-  `check` returns, carried by `:gate-failed` under `:check`. The
-  executor's exception rides both throws as the cause."
+  refusal. Rows from the drift probe mean `:drift-refused` and take
+  precedence — gate SQL compiled against a dead schema answers about a
+  database that no longer exists. Otherwise the Gates' rows zip back
+  onto `gates` as the same Check result a manual `check` returns,
+  carried by `:gate-failed` under `:check`. The executor's exception
+  rides both throws as the cause."
   [plan gates gate-results cause]
-  (let [[drift-rows & gate-rows] gate-results]
+  (let [[drift-rows gate-rows] (frame-gate-results gate-results)]
     (if (seq drift-rows)
       (drift-refused! plan (:schema_version (first drift-rows)) cause)
       (let [result (check-result gates gate-rows)
@@ -628,7 +649,7 @@
     (verify-fingerprint! conn plan)
     (let [check-gates? (not (false? (:check-gates? opts)))
           gates (if check-gates? (plan-gates plan) [])
-          gate-sqls (into [(drift-probe-sql plan)] (map (comp :sql second)) gates)
+          gate-sqls (frame-gate-sqls plan gates)
           statements (into [] (mapcat :sql) (:ops plan))]
       (try
         (p/execute-batch! conn statements gate-sqls)
@@ -636,11 +657,9 @@
           (let [data (ex-data e)
                 located (when-let [i (:statement-index data)]
                           (op-at-batch-index (:ops plan) i))
-                ;; `gate-sqls` index 0 is the drift probe, which names
-                ;; no Gate: its failure falls through to the rethrow
-                failed-gate (when-let [i (:gate-index data)]
-                              (when (pos? i)
-                                (nth gates (dec i))))]
+                ;; a failed drift probe names no Gate and falls through
+                ;; to the rethrow
+                failed-gate (some->> (:gate-index data) (frame-gate gates))]
             (cond
               (= :gates-violated (:sqlite-migrate/error data))
               (gates-violated! plan gates (:gate-results data) e)
