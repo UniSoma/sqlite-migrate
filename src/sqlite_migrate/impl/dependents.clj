@@ -236,7 +236,7 @@
     (into #{} (keep changed-paths) (into direct (mapcat #(reachable reads %)) direct))))
 
 (defn planning-dependents
-  "The dependents every table planner threads: `:surviving-dependents`
+  "The survivors and readers every table planner threads: `:surviving-dependents`
   — what the phase-1 and phase-2 drops leave standing once the readers
   are gone (ADR 0006) — `:surviving-sqls`, their flat sql, and
   `:readers`, the Readers of the changed views (ADR 0026) that

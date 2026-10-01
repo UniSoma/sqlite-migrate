@@ -33,8 +33,9 @@ WHERE clauses, DEFAULT spellings) carried in a Snapshot as extracted text, never
 into an AST. Compared, carried, and re-emitted — never understood.
 
 **Declaration**:
-The user-supplied target schema: canonically SQL text (a single string or a seq of
-statements), pure state carrying no migration intent. Meaningful only once executed into
+The user-supplied target schema: canonically SQL text — one string, or a seq of
+strings, each holding one or more statements, with SQLite deciding where each
+ends — pure state carrying no migration intent. Meaningful only once executed into
 a pristine database and introspected into a Snapshot.
 _Avoid_: target schema file, schema DSL
 
@@ -121,12 +122,24 @@ dependents — subsuming all of that table's changes at once. The copy maps
 columns by name only; it never transforms values.
 _Avoid_: table recreation, copy migration
 
+**Survivor**:
+A live view or trigger that still stands while a Plan changes its tables: no
+Diff entry drops it and no drop Directive removes its table. Dependents and
+Readers are drawn from the survivors, and in-place column drops are judged
+legal against them.
+_Avoid_: surviving dependent, referencer
+
+**Dependent**:
+A Survivor that reads a table a Rebuild rebuilds — directly, or through a chain
+of views. The Rebuild drops it before its rename and creates it again after,
+from its Stored CREATE sql, each view after the views it reads.
+_Avoid_: referencer, reader (reserved for what reads a changed view)
+
 **Reader**:
-A surviving view or trigger that reads a changed view — directly, or through
-another reader. A Plan drops each reader together with the changed view and
-creates it again from its Stored CREATE sql once the tables have changed, so
-nothing reads a missing view while the tables change; each of its Ops serves
-the changed views' Diff entries (ADR 0026).
+A Survivor that reads a changed view — directly, or through another reader. A
+Plan drops it together with the changed view and creates it again from its
+Stored CREATE sql once the tables have changed, so nothing reads a missing
+view in between (ADR 0026).
 _Avoid_: dependent (reserved for what a Rebuild drops around its rename)
 
 **Apply**:
