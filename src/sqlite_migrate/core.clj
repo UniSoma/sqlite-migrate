@@ -474,15 +474,16 @@
     {:pass? (every? :pass? results) :gates results}))
 
 (defn- gate-errored!
-  "Throw `:sqlite-error` attributing a failure to run `gate`, the Gate
-  at its op's plan index `op-index`: the Gate verbatim under `:gate`
-  beside `:op-index`, as a Check result entry carries them. `e` is the
-  executor's exception; the driver exception under it rides as the
-  cause, as on the statement path. Drift takes precedence (ADR 0018):
-  when `conn`'s fingerprint, re-read outside any transaction, has moved
-  off `plan`'s, throw `:drift-refused` with that `:sqlite-error` as the
-  cause instead — the Gate likely failed on an object the drift
-  removed. A re-read that fails leaves the `:sqlite-error` standing."
+  "Throw `:sqlite-error` for `gate`, of the op at plan index
+  `op-index`, that SQLite failed to run: the Gate verbatim under
+  `:gate` beside `:op-index`, as a Check result entry carries them.
+  `e` is the executor's exception; the driver exception under it rides
+  as the cause, as on the statement path. Drift takes precedence (ADR
+  0018): when `conn`'s fingerprint, re-read outside any transaction,
+  has moved off `plan`'s, throw `:drift-refused` with that
+  `:sqlite-error` as the cause instead — the Gate likely failed on an
+  object the drift removed. A re-read that fails leaves the
+  `:sqlite-error` standing."
   [conn plan [op-index gate] e]
   (let [error (ex-info (str "gate " (:code gate) " of op " op-index " failed")
                 {:sqlite-migrate/error :sqlite-error
@@ -609,12 +610,12 @@
   same `:sqlite-error` `check` throws for it — the Gate under `:gate`,
   its op's `:op-index`, no `:op` — or `:drift-refused` when the
   fingerprint moved meanwhile; a failure of the drift probe itself
-  throws `:sqlite-error` with neither key. A mid-apply SQLite failure
-  throws `:sqlite-error` carrying the failing Op verbatim, its plan
-  index (`:op-index`), and the specific SQL statement that failed.
-  Returns a minimal Apply report — the Check result rides it under
-  `:check`, absent when gate-checking was skipped; throws on every
-  non-success."
+  (ADR 0016) throws `:sqlite-error` without `:gate` or `:op-index`. A
+  mid-apply SQLite failure throws `:sqlite-error` carrying the failing
+  Op verbatim, its plan index (`:op-index`), and the specific SQL
+  statement that failed. Returns a minimal Apply report — the Check
+  result rides it under `:check`, absent when gate-checking was
+  skipped; throws on every non-success."
   ([conn plan] (apply! conn plan {}))
   ([conn plan opts]
     (when (and (seq (:unhandled plan)) (not (:allow-unhandled? opts)))
@@ -635,6 +636,8 @@
           (let [data (ex-data e)
                 located (when-let [i (:statement-index data)]
                           (op-at-batch-index (:ops plan) i))
+                ;; `gate-sqls` index 0 is the drift probe, which names
+                ;; no Gate: its failure falls through to the rethrow
                 failed-gate (when-let [i (:gate-index data)]
                               (when (pos? i)
                                 (nth gates (dec i))))]

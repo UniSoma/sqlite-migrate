@@ -48,8 +48,9 @@
       3. `BEGIN`
       4. run every one of `gate-sqls`, in order, on the query path
          (keyword-keyed row maps, as `execute-query`) — all of them,
-         never fail-fast. If every result is empty, proceed. If any
-         returned rows, roll back and throw with ex-data
+         never stopping at one that returns rows. If every result is
+         empty, proceed. If any returned rows, roll back and throw
+         with ex-data
          `{:sqlite-migrate/error :gates-violated, :gate-results [...]}`,
          where `:gate-results` is index-aligned with `gate-sqls`, one
          vector of row maps per entry (empty = that gate passed). The
@@ -73,5 +74,6 @@
     fails, the thrown exception's ex-data must carry the failing entry's
     zero-based index in `gate-sqls` under `:gate-index`, with the driver
     exception as the cause — callers attribute the failure back to the
-    gate that contributed the SQL. A step-6 failure carries neither key.
+    gate that contributed the SQL. The step-4 `:gates-violated` throw
+    and a step-6 failure carry neither key.
     Returns nil — success is silence, failure throws."))

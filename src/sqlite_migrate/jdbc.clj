@@ -97,10 +97,11 @@
 
 (defn- check-gates!
   "Frame step 4: run every one of `gate-sqls` inside the open
-  transaction — all of them, never fail-fast — and throw
-  `:gates-violated` with the index-aligned results when any returned
-  rows. A gate query that fails throws `:sqlite-error` naming its index
-  in `gate-sqls` under `:gate-index`, the driver exception as the cause."
+  transaction — all of them, never stopping at one that returns rows —
+  and throw `:gates-violated` with the index-aligned results when any
+  returned rows. A gate query that fails throws `:sqlite-error` naming
+  its index in `gate-sqls` under `:gate-index`, the driver exception as
+  the cause."
   [^Connection connection gate-sqls]
   (let [results (into []
                   (map-indexed
